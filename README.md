@@ -105,7 +105,7 @@
 - 두 경우 모두: **systemd 서비스**로 부팅 시 자동 실행 (기존 lightdm은 disable)
 - 터치 캘리브레이션: 필요 시 `xinput_calibrator` 또는 evdev calibration 값 재조정
 
-## 함정 (踩坑 기록)
+## 함정 기록
 
 - PowerShell → ssh 원격 명령에서 **더블quote 안에 파이프(`|`)가 있으면 깨짐** (PowerShell 네이티브 인자 처리 문제)
   - 해결: 원격 명령은 싱글quote 문자열로, 더블quote 쓰지 않기. grep 대안 문자열은 문자 클래스로 (`grep -iE [t]ouch`), 또는 여러 grep으로 분리
@@ -114,6 +114,6 @@
 - `fb_var_screeninfo`는 `line_length` 필드가 **없음** (40×u32, bpp @index 6) — 구조체는 `/usr/include/linux/fb.h` 확인
 - Pillow: **RGB→565 코어 변환 없음** (`convert("565")` unsupported, `frombytes("565")`도 인식 불가) → translate 테이블로 수동 변환 (참고: `tokcat.py rgb_to_565`)
 - 리포 기본 Xorg 설정의 `/dev/fb1` → 이 시스템은 `/dev/fb0`
-- goodtft 공식 드라이버(`LCD-show`/`LCD35-show`)는 32비트 구형 OS 기준이라 64비트 trixie에서 작동안함 → 커뮤니티 dtbo方式使用
+- goodtft 공식 드라이버(`LCD-show`/`LCD35-show`)는 32비트 구형 OS 기준이라 64비트 trixie에서 작동안함 → 커뮤니티 dtbo 사용
 - GPIO 핫플러그 금지: 디스플레이 연결/해제 전 반드시 전원 차단
 - `grep -q dtparam=spi=on config.txt`처럼 주석 라인(`#dtparam=spi=on`)이 부분 일치하므로, 주석 해제 확인은 `grep -n`으로 직접 보기
