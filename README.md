@@ -60,6 +60,7 @@
    - `deploy.ps1` (로컬) — 파일 push + 서비스 (재)설치, `scripts/capture.ps1` — 캡처→로컬
    - `test_565.py` — 565 인/디코더 자가테스트 (known-value + gradient 라운드트립)
 2. 검증: 시계·텍스트·색상 픽셀 프로브로 확인 (설계값=양자화값 일치)
+3. 2026-11-10: 리부트 테스트 — SSH reboot 후 서비스 단독 기동 + 화면 렌더링 확인 (P0 완료)
 
 ## 작업 이력 (2026-11-08)
 
@@ -87,7 +88,7 @@
 
 - `/dev/fb0`: 480×320 프레임버퍼 정상 동작 (부팅 시 CLI 콘솔이 TFT에 표시됨)
 - 터치: `ADS7846 Touchscreen` 입력 장치로 인식됨 (`/dev/input/event*`)
-- **tokcat 서비스 (2026-11-09 P0)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동, crash 자동 재기동. 화면: 시계+레이아웃 스켈레톤 (P1부터 라이브 지표+고양이). `scripts/capture.ps1`로 화면 캡처 확인
+- **tokcat 서비스 (P0 완료 2026-11-10)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 시계+레이아웃 스켈레톤 (P1부터 라이브 지표+고양이). `scripts/capture.ps1`로 화면 캡처 확인
 - 데스크톱: **리부트 후 수동** `~/start-tft-desktop.sh` 실행으로만 기동 (lightdm 자동 부팅은 이 디스플레이에서 작동안함)
 - 자동 기동: 미설정 (데스크톱 기준 — tokcat은 systemd로 자동)
 - 2026-11-08 최종 확인 (Wi-Fi .40): fb0 480×320 정상, 터치 인식 정상, SSH 정상
