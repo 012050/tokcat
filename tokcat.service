@@ -1,0 +1,13 @@
+[Unit]
+Description=tokcat TFT kiosk (vLLM status + RunCat on /dev/fb0)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/tokcat/tokcat.py /opt/tokcat/config.toml
+WorkingDirectory=/opt/tokcat
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
