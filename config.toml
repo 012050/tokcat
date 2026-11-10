@@ -1,13 +1,29 @@
-# tokcat config — P0 (layout/colors). Poll endpoints used from P1.
+# tokcat config — P1 (live metrics + cat animation)
 
 [display]
 title = "runcater"
-status_text = "P0"   # badge text (P1: ONLINE/OFFLINE/...)
 
-[poll]  # P1: primary + fallback, 1s polling
+[poll]  # primary + fallback, 1s polling (fallback wired in P2)
 interval = 1.0
+timeout = 2.0
 primary = "http://192.168.1.221:8000/api/live"
 fallback = "http://192.168.1.221:8001/metrics"
+
+[speed]  # gputils core.py 속도 모델 포트 (동일 파라미터)
+tok_cap = 40.0
+weight_tok = 0.6
+weight_cache = 0.3
+weight_wait = 0.1
+ema_alpha = 0.5
+band_run = 30
+band_sprint = 70
+band_overload = 91
+wait_overload = 1
+
+[cat]
+frames_dir = "cat_frames"  # 앱 디렉터리 상대 (RunCat, runcat-dev/RunCatNeo, Apache-2.0)
+width = 150                # 높이 = width * 36/56 (56:36 스프라이트 비율)
+color = "0xf0f0f8"         # gputils 기본 색
 
 [color]
 bg = "0x0b0e13"

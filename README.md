@@ -61,6 +61,13 @@
    - `test_565.py` — 565 인/디코더 자가테스트 (known-value + gradient 라운드트립)
 2. 검증: 시계·텍스트·색상 픽셀 프로브로 확인 (설계값=양자화값 일치)
 3. 2026-11-10: 리부트 테스트 — SSH reboot 후 서비스 단독 기동 + 화면 렌더링 확인 (P0 완료)
+4. **P1 라이브+고양이 배포** (2026-11-10):
+   - `tokcat.py` 리팩터링 — `/api/live` 1초 폴링(백그라운드 스레드), 6개 지표+in-flight 표시, gputils `core.py` 속도 모델 포트(`[speed]` config화), RunCat 애니메이션
+   - 렌더링: 정적 화면 1초당 베이스 렌더 + 스프라이트 사전 변환 RGB565 스플리스 (애니메이션 틱 = memcpy)
+   - `rgb_to_565` numpy화 (python3-numpy, 부재 시 pure-python 폴백), `cat_frames/` 6스프라이트 레포 내재화 (gputils 무변경)
+   - `config.toml` `[speed]`/`[cat]`/`[poll].timeout` 추가, `deploy.ps1` cat_frames push
+   - 검증: 유휴 상태에서 동시 `/api/live` json ↔ 화면 캡처 **픽셀 diff 0** (`scripts/verify_expect.py`), run 포즈(부하) → sleep 포즈(유휴) 전환 캡처 확인, CPU ~1%
+5. git: `dev` 브랜치 분기 — 개발은 `dev`, 안정화 시 `main` 머지 (GitHub 기본 브랜치 main 유지)
 
 ## 작업 이력 (2026-11-08)
 
@@ -88,7 +95,7 @@
 
 - `/dev/fb0`: 480×320 프레임버퍼 정상 동작 (부팅 시 CLI 콘솔이 TFT에 표시됨)
 - 터치: `ADS7846 Touchscreen` 입력 장치로 인식됨 (`/dev/input/event*`)
-- **tokcat 서비스 (P0 완료 2026-11-10)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 시계+레이아웃 스켈레톤 (P1부터 라이브 지표+고양이). `scripts/capture.ps1`로 화면 캡처 확인
+- **tokcat 서비스 (P1 완료 2026-11-10)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). `scripts/capture.ps1`로 화면 캡처 확인
 - 데스크톱: **리부트 후 수동** `~/start-tft-desktop.sh` 실행으로만 기동 (lightdm 자동 부팅은 이 디스플레이에서 작동안함)
 - 자동 기동: 미설정 (데스크톱 기준 — tokcat은 systemd로 자동)
 - 2026-11-08 최종 확인 (Wi-Fi .40): fb0 480×320 정상, 터치 인식 정상, SSH 정상
