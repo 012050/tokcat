@@ -73,7 +73,7 @@
    - `config.toml` — `[poll] fallback_after = 3`
    - `scripts/` — `test_p2_poller.py`(전환 테스트), `verify_fallback.py`(폴백/오프라인 화면 픽셀 검증, 배지 상태 자동 감지), `mock_metrics.py`(결정적 mock vLLM), `proxy_live.py`(primary on/off 토글), `probe_badge*.py`(배지 픽셀 식별)
    - 검증: mock 폴백 화면 **픽셀 diff 0** (WALK·vLLM 배지 + req 2/0, KV 42%, in-flight n/a), OFFLINE 화면 diff 0, 실 vLLM 폴백 RUN/WALK·vLLM 배지 diff 0, fallback→primary **자동 복귀**(리부트 없이, journal), primary 화면 diff 0
-   - 남은 것: 24시간 안정 동작 검증 (진행 중)
+   - 24시간 안정화 기준: 그간 재기동/에러 없음 → 사용자 판단으로 생략, P2 완료
 
 ## 작업 이력 (2026-11-08)
 
@@ -101,7 +101,7 @@
 
 - `/dev/fb0`: 480×320 프레임버퍼 정상 동작 (부팅 시 CLI 콘솔이 TFT에 표시됨)
 - 터치: `ADS7846 Touchscreen` 입력 장치로 인식됨 (`/dev/input/event*`)
-- **tokcat 서비스 (P2 코드 완료 2026-11-10, 24시간 검증 진행 중)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). tokenbills 다운 시 vLLM `:8001/metrics` 직결 폴백(배지 `· vLLM`). `scripts/capture.ps1`로 화면 캡처 확인
+- **tokcat 서비스 (P2 완료 2026-11-10)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). tokenbills 다운 시 vLLM `:8001/metrics` 직결 폴백(배지 `· vLLM`). `scripts/capture.ps1`로 화면 캡처 확인
 - 데스크톱: **리부트 후 수동** `~/start-tft-desktop.sh` 실행으로만 기동 (lightdm 자동 부팅은 이 디스플레이에서 작동안함)
 - 자동 기동: 미설정 (데스크톱 기준 — tokcat은 systemd로 자동)
 - 2026-11-08 최종 확인 (Wi-Fi .40): fb0 480×320 정상, 터치 인식 정상, SSH 정상

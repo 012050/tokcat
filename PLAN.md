@@ -102,7 +102,7 @@ runcater (python app, systemd)
 |---|---|---|
 | **P0** 스켈레톤 | fb0 렌더링(시계+텍스트) + systemd + **화면 검증 루프** (fb0→PNG 캡처로 에이전트가 직접 화면 확인) | 부팅 시 단독으로 화면 표시, 서비스 자동 재기동, PNG 캡처로 상태 확인 가능 | ✅ 2026-11-10 (리부트 후 자동 기동까지 전부 확인) |
 | **P1** 라이브+고양이 | `/api/live` 폴링, 6개 지표 표시, 속도 모델+고양이 애니메이션 | 값이 tokenbills 대시보드와 일치, 부하에 따라 고양이 속도 반응, 오프라인 상태 표시 | ✅ 2026-11-10 (동시 json+캡처 픽셀 대조 diff 0, run/sleep 상태 전환 캡처 확인) |
-| **P2** 폴백+폴리ッシュ | vLLM 직결 폴백, 프리필 공백 처리, 레이아웃/폰트/색상 확정, 안정화 | tokenbills·vLLM 정지/재기동 시 앱 다운 없음, 24시간 이상 안정 동작 | ⏳ 2026-11-10 코드+픽셀 검증 완료, 24시간 안정화 진행 중 |
+| **P2** 폴백+폴리ッシュ | vLLM 직결 폴백, 프리필 공백 처리, 레이아웃/폰트/색상 확정, 안정화 | tokenbills·vLLM 정지/재기동 시 앱 다운 없음, 24시간 이상 안정 동작 | ✅ 2026-11-10 (픽셀 검증 diff 0×5, 자동 복귀 확인. 24시간 기준은 사용자 판단으로 생략 — 그간 문제 없음) |
 | **P3** (옵션) | 사용량/비용(오늘·이번 달 KRW) 추가, 터치 조작(상세 전환), 클라이언트 IP 순위 | §8 결정에 따라 |
 
 ### P0 산출물 (2026-11-09)
@@ -114,6 +114,7 @@ runcater (python app, systemd)
 - **프리필 공백**: `—` 표시 (최근값 유지 없음, P1 동작 유지)
 - **폴백 전환**: **3회 연속 실패**(≈3초, `[poll] fallback_after`) 시 vLLM `:8001/metrics` 직결, **1회 성공 시 primary 복귀** (폴백 중에도 매 주기 primary 탐지)
 - **폴백 표시**: 상단 상태 배지에 `· vLLM` 추가 (예: `RUN · vLLM`), in-flight 줄은 `n/a`
+- **레이아웃/폰트/색상**: 2026-11-10 캡처 3종(폴백/정상/오프라인) 검토 후 **현 상태 그대로 확정** (수정 없음)
 
 ### P2 산출물 (2026-11-10)
 - `tokcat.py` — `LivePoller` primary/fallback 상태 머신 (3회 연속 실패→폴백, 1회 성공→복귀, 폴백 중에도 매 주기 primary 탐지, 전환 시 `poll mode X -> Y` journal 로그), `fetch_metrics` (vLLM Prometheus 파싱 — **latency _sum 2종은 `vllm:` 접두사 없음**), `delta_rates` (counter 델타 → MTP/decode/prefill, 카운터 리셋 시 None), 배지 `· vLLM` 접미 + in-flight `n/a`
@@ -124,7 +125,7 @@ runcater (python app, systemd)
   - OFFLINE(양쪽 다운) 화면 **픽셀 diff 0**
   - 실 vLLM 폴백: RUN·vLLM / WALK·vLLM 배지 **diff 0** (실시간 부하 상태 정확 표시)
   - fallback→primary **자동 복귀** (리부트 없이, journal 확인) + primary 화면 픽셀 diff 0
-- 남은 것: **24시간 안정 동작** (2026-11-10 12:11부터 진행 — 재기동 없이 journal 유지 확인)
+- 24시간 안정화: 그간(배포→검증 과정 전체) 재기동/에러 없음 → 사용자 판단으로 기준 생략, **P2 완료 (2026-11-10)**
 
 ### P1 산출물 (2026-11-10)
 - `tokcat.py` — `/api/live` 1s 폴링(백그라운드 스레드, 루프가 죽지 않음), gputils `core.py` SpeedModel/상태밴드 포트, 6개 지표+in-flight 표시, RunCat 애니메이션
