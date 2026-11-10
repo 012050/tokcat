@@ -102,13 +102,29 @@ runcater (python app, systemd)
 |---|---|---|
 | **P0** 스켈레톤 | fb0 렌더링(시계+텍스트) + systemd + **화면 검증 루프** (fb0→PNG 캡처로 에이전트가 직접 화면 확인) | 부팅 시 단독으로 화면 표시, 서비스 자동 재기동, PNG 캡처로 상태 확인 가능 | ✅ 2026-11-10 (리부트 후 자동 기동까지 전부 확인) |
 | **P1** 라이브+고양이 | `/api/live` 폴링, 6개 지표 표시, 속도 모델+고양이 애니메이션 | 값이 tokenbills 대시보드와 일치, 부하에 따라 고양이 속도 반응, 오프라인 상태 표시 | ✅ 2026-11-10 (동시 json+캡처 픽셀 대조 diff 0, run/sleep 상태 전환 캡처 확인) |
-| **P2** 폴백+폴리ッシュ | vLLM 직결 폴백, 프리필 공백 처리, 레이아웃/폰트/색상 확정, 안정화 | tokenbills·vLLM 정지/재기동 시 앱 다운 없음, 24시간 이상 안정 동작 |
+| **P2** 폴백+폴리ッシュ | vLLM 직결 폴백, 프리필 공백 처리, 레이아웃/폰트/색상 확정, 안정화 | tokenbills·vLLM 정지/재기동 시 앱 다운 없음, 24시간 이상 안정 동작 | ⏳ 2026-11-10 코드+픽셀 검증 완료, 24시간 안정화 진행 중 |
 | **P3** (옵션) | 사용량/비용(오늘·이번 달 KRW) 추가, 터치 조작(상세 전환), 클라이언트 IP 순위 | §8 결정에 따라 |
 
 ### P0 산출물 (2026-11-09)
 - `tokcat.py` (fb0 mmap 렌더링, Pillow RGB→565 수동 변환), `capture_fb0.py` (캡처), `config.toml`, `tokcat.service`, `install.sh`, `deploy.ps1`, `scripts/capture.ps1` (캡처→로컬), `scripts/probe.py` (픽셀 검증), `test_565.py`
 - Pi: `/opt/tokcat` + systemd `tokcat.service` (enabled)
 - 함정 기록: README "함정" 섹션 (fb0 fstat=0, fb_fix_screeninfo 오프셋, Pillow 565 변환 부재, PS `$(...)`)
+
+### P2 결정 사항 (2026-11-10)
+- **프리필 공백**: `—` 표시 (최근값 유지 없음, P1 동작 유지)
+- **폴백 전환**: **3회 연속 실패**(≈3초, `[poll] fallback_after`) 시 vLLM `:8001/metrics` 직결, **1회 성공 시 primary 복귀** (폴백 중에도 매 주기 primary 탐지)
+- **폴백 표시**: 상단 상태 배지에 `· vLLM` 추가 (예: `RUN · vLLM`), in-flight 줄은 `n/a`
+
+### P2 산출물 (2026-11-10)
+- `tokcat.py` — `LivePoller` primary/fallback 상태 머신 (3회 연속 실패→폴백, 1회 성공→복귀, 폴백 중에도 매 주기 primary 탐지, 전환 시 `poll mode X -> Y` journal 로그), `fetch_metrics` (vLLM Prometheus 파싱 — **latency _sum 2종은 `vllm:` 접두사 없음**), `delta_rates` (counter 델타 → MTP/decode/prefill, 카운터 리셋 시 None), 배지 `· vLLM` 접미 + in-flight `n/a`
+- `config.toml` — `[poll] fallback_after = 3`
+- `scripts/` — `test_p2_poller.py` (전환 단위 테스트), `verify_fallback.py` (폴백/오프라인 화면 픽셀 검증, 배지 상태 자동 감지), `mock_metrics.py` (결정적 mock vLLM), `proxy_live.py` (tokenbills 프록시 — primary on/off 토글, 프로덕션 무접촉), `probe_badge.py`/`probe_badge_text.py` (배지 픽셀 식별)
+- 검증 (프로덕션 tokenbills·vLLM 무접촉 — 프록시/mock/ 죽은 포트 사용):
+  - mock 폴백 화면 **픽셀 diff 0** (WALK·vLLM 배지, req 2/0, KV 42%, MTP/decode/prefill —, in-flight n/a)
+  - OFFLINE(양쪽 다운) 화면 **픽셀 diff 0**
+  - 실 vLLM 폴백: RUN·vLLM / WALK·vLLM 배지 **diff 0** (실시간 부하 상태 정확 표시)
+  - fallback→primary **자동 복귀** (리부트 없이, journal 확인) + primary 화면 픽셀 diff 0
+- 남은 것: **24시간 안정 동작** (2026-11-10 12:11부터 진행 — 재기동 없이 journal 유지 확인)
 
 ### P1 산출물 (2026-11-10)
 - `tokcat.py` — `/api/live` 1s 폴링(백그라운드 스레드, 루프가 죽지 않음), gputils `core.py` SpeedModel/상태밴드 포트, 6개 지표+in-flight 표시, RunCat 애니메이션
@@ -131,5 +147,5 @@ runcater (python app, systemd)
 ## 8. 미정 사항 (다음 세션에서 결정)
 1. **사용량/비용(오늘·이번 달 KRW)**을 단일 화면에 넣을 것인가 — 넣으면 in-flight 줄과 레이아웃 경쟁 (P3로 유보 가능)
 2. **터치 활용**: 탭으로 상세 전환 / 표시 전용(무터치)
-3. **프리필 공백**: `—` 표시 vs 최근값 유지
+3. ~~**프리필 공백**: `—` 표시 vs 최근값 유지~~ — **`—` 표시로 확정 (2026-11-10)**
 4. ~~렌더링 엔진: pygame vs Pillow+mmap~~ — **Pillow+mmap으로 확정 (2026-11-10)**

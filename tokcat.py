@@ -5,6 +5,11 @@ P1: polls tokenbills /api/live (1s), shows live metrics and runs the RunCat
 animation with the gputils speed model. No X server: renders directly to
 /dev/fb0 (16bpp RGB565) via mmap.
 
+P2: vLLM /metrics direct fallback — after N consecutive primary failures
+(fallback_after) the poller serves 5 metrics straight from vLLM (in-flight
+detail unavailable -> "n/a") and the status badge gains a "· vLLM" suffix.
+Returns to primary on the first successful probe.
+
 Rendering strategy: the static screen (bars / clock / metrics) is composed
 once per data sample or clock tick with Pillow ("base" frame). Cat
 animation frames are pre-converted RGB565 blobs that get spliced into the
@@ -150,7 +155,8 @@ class Snapshot:
     mtp_rate: float | None = None  # 0..1
     decode_tps: float | None = None
     prefill_tps: float | None = None
-    in_flight: tuple = ()          # pre-formatted "client · tag · model · Ns"
+    in_flight: tuple | None = None # None = no source (offline/fallback), () = no requests
+    source: str | None = None      # "primary" | "fallback" | None
     tok_s: float = 0.0
     speed: float = 0.0
     state: str = "offline"
@@ -240,38 +246,145 @@ def fetch_live(url, timeout):
         decode_tps=_opt_f(rates.get("decode_tokens_per_s")),
         prefill_tps=_opt_f(rates.get("prefill_tokens_per_s")),
         in_flight=tuple(inflight),
+        source="primary",
     )
 
 
+# vLLM /metrics names (verified on the tokenbills box 2026-11-10).
+# Note: the two latency _sum series carry NO "vllm:" prefix.
+_VLLM_NAMES = (
+    "num_requests_running", "num_requests_waiting", "kv_cache_usage_perc",
+    "generation_tokens_total", "prompt_tokens_total",
+    "inter_token_latency_seconds_sum", "time_to_first_token_seconds_sum",
+    "spec_decode_num_draft_tokens_total",
+    "spec_decode_num_accepted_tokens_total",
+)
+
+
+def fetch_metrics(url, timeout):
+    """GET vLLM /metrics (Prometheus text) -> {metric name: float}.
+
+    Labels are stripped; first series per name wins (single-engine box).
+    """
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        text = resp.read().decode(errors="replace")
+    vals = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, _, raw = line.rpartition(" ")
+        base = name.split("{", 1)[0]
+        if base.startswith("vllm:"):
+            base = base[len("vllm:"):]
+        if base not in vals:
+            try:
+                vals[base] = float(raw)
+            except ValueError:
+                continue
+    return {k: v for k, v in vals.items() if k in _VLLM_NAMES}
+
+
+def _delta(prev, cur, key):
+    if prev is None or key not in prev or key not in cur:
+        return None
+    d = cur[key] - prev[key]
+    return d if d >= 0 else None  # counter reset -> no rate
+
+
+def delta_rates(prev, cur):
+    """(mtp_rate, decode_tps, prefill_tps) from counter/histogram deltas.
+
+    Mirrors the tokenbills rate definitions (PLAN.md §4.2). None when the
+    denominator is missing or zero (e.g. no prefill activity in the window).
+    """
+    mtp = decode = prefill = None
+    d_acc = _delta(prev, cur, "spec_decode_num_accepted_tokens_total")
+    d_dra = _delta(prev, cur, "spec_decode_num_draft_tokens_total")
+    if d_acc is not None and d_dra is not None and d_dra > 0:
+        mtp = min(d_acc / d_dra, 1.0)
+    d_gen = _delta(prev, cur, "generation_tokens_total")
+    d_itl = _delta(prev, cur, "inter_token_latency_seconds_sum")
+    if d_gen is not None and d_itl is not None and d_itl > 0:
+        decode = d_gen / d_itl
+    d_pro = _delta(prev, cur, "prompt_tokens_total")
+    d_ttft = _delta(prev, cur, "time_to_first_token_seconds_sum")
+    if d_pro is not None and d_ttft is not None and d_ttft > 0:
+        prefill = d_pro / d_ttft
+    return mtp, decode, prefill
+
+
 class LivePoller(threading.Thread):
-    """Poll /api/live on a fixed cadence; deliver Snapshots via on_sample.
+    """Poll the primary (tokenbills /api/live) on a fixed cadence, falling
+    back to vLLM /metrics after `fallback_after` consecutive primary
+    failures (P2). Returns to primary on the first successful probe.
 
     The poll loop never dies: any fetch error yields an offline sample
     (mirrors gputils core.Poller).
     """
 
-    def __init__(self, url, interval, timeout, scfg, on_sample):
+    def __init__(self, primary, fallback, interval, timeout, scfg, on_sample,
+                 fallback_after=3):
         super().__init__(daemon=True)
-        self.url, self.interval, self.timeout = url, interval, timeout
+        self.primary, self.fallback = primary, fallback
+        self.interval, self.timeout = interval, timeout
+        self.fallback_after = fallback_after
         self.scfg, self.on_sample = scfg, on_sample
         self._stop_evt = threading.Event()
+        self._mode = "primary"
+        self._fails = 0
+        self._prev_fb = None  # last vLLM /metrics sample (for rate deltas)
 
     def stop(self):
         self._stop_evt.set()
+
+    def _set_mode(self, new):
+        if new != self._mode:
+            print(f"tokcat: poll mode {self._mode} -> {new}", flush=True)
+            self._mode = new
+
+    def _poll_once(self, model):
+        try:
+            snap = fetch_live(self.primary, self.timeout)
+            # primary (back) up: reset fail count + fallback delta baseline
+            self._set_mode("primary")
+            self._fails, self._prev_fb = 0, None
+            if snap.online:
+                snap.tok_s, snap.speed = model.update(
+                    snap.decode_tps, snap.kv, snap.waiting)
+            return snap
+        except Exception:  # noqa: BLE001 - the loop must not die
+            self._fails += 1
+            if self._mode != "fallback" and self._fails < self.fallback_after:
+                # transient window: offline until the primary is confirmed
+                return Snapshot(online=False, error="primary unavailable")
+            self._set_mode("fallback")
+            try:
+                vals = fetch_metrics(self.fallback, self.timeout)
+                mtp, dec, pre = delta_rates(self._prev_fb, vals)
+                snap = Snapshot(
+                    online=True,
+                    running=int(vals.get("num_requests_running", 0)),
+                    waiting=int(vals.get("num_requests_waiting", 0)),
+                    kv=float(vals.get("kv_cache_usage_perc", 0.0)),
+                    mtp_rate=mtp, decode_tps=dec, prefill_tps=pre,
+                    in_flight=None,  # tokenbills-only detail
+                    source="fallback",
+                )
+                self._prev_fb = vals
+            except Exception as exc:  # noqa: BLE001 - both sources down
+                snap, self._prev_fb = Snapshot(online=False, error=str(exc)), None
+            if snap.online:
+                snap.tok_s, snap.speed = model.update(
+                    snap.decode_tps, snap.kv, snap.waiting)
+            return snap
 
     def run(self):
         model = SpeedModel(self.scfg)
         while not self._stop_evt.is_set():
             t0 = time.monotonic()
-            try:
-                snap = fetch_live(self.url, self.timeout)
-                if snap.online:
-                    snap.tok_s, snap.speed = model.update(
-                        snap.decode_tps, snap.kv, snap.waiting)
-                snap.state = state_for(self.scfg, snap.speed, snap.waiting,
-                                       snap.online)
-            except Exception as exc:  # noqa: BLE001 - the loop must not die
-                snap = Snapshot(online=False, error=str(exc))
+            snap = self._poll_once(model)
+            snap.state = state_for(self.scfg, snap.speed, snap.waiting,
+                                   snap.online)
             self.on_sample(snap)
             # timeout independent of the poll cadence (see gputils core.Poller)
             self._stop_evt.wait(max(0.2, self.interval - (time.monotonic() - t0)))
@@ -343,6 +456,8 @@ def render_base(cfg, fonts, now, snap):
     d.text((m, 9), cfg["display"]["title"], font=fonts["title"], fill=fg)
 
     badge = snap.state.upper()
+    if snap.online and snap.source == "fallback":
+        badge += " · vLLM"
     badge_color = {"overload": error, "offline": error, "sprint": warn}.get(
         snap.state, accent)
     bw = int(d.textlength(badge, font=fonts["badge"]))
@@ -365,7 +480,12 @@ def render_base(cfg, fonts, now, snap):
         mtp = f"{snap.mtp_rate * 100:.0f}%" if snap.mtp_rate is not None else "—"
         dec = f"{snap.decode_tps:.1f} t/s" if snap.decode_tps is not None else "—"
         pre = f"{snap.prefill_tps:.1f} t/s" if snap.prefill_tps is not None else "—"
-        inflight = snap.in_flight[0] if snap.in_flight else "—"
+        if snap.in_flight is None:
+            inflight = "n/a"  # fallback: in-flight detail not available
+        elif snap.in_flight:
+            inflight = snap.in_flight[0]
+        else:
+            inflight = "—"
     else:
         req = kv = mtp = dec = pre = "—"
         inflight = "n/a"
@@ -410,9 +530,10 @@ def main():
 
     box = _SnapshotBox()
     poll = cfg["poll"]
-    poller = LivePoller(poll["primary"], float(poll["interval"]),
-                        float(poll.get("timeout", 2.0)), cfg["speed"],
-                        box.on_sample)
+    poller = LivePoller(poll["primary"], poll["fallback"],
+                        float(poll["interval"]), float(poll.get("timeout", 2.0)),
+                        cfg["speed"], box.on_sample,
+                        int(poll.get("fallback_after", 3)))
     poller.start()
 
     last_base = None

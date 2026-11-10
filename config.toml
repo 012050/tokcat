@@ -1,13 +1,14 @@
-# tokcat config — P1 (live metrics + cat animation)
+# tokcat config — P2 (live metrics + cat animation + vLLM direct fallback)
 
 [display]
 title = "runcater"
 
-[poll]  # primary + fallback, 1s polling (fallback wired in P2)
+[poll]  # 1s polling; vLLM direct fallback after N consecutive primary failures
 interval = 1.0
 timeout = 2.0
 primary = "http://192.168.1.221:8000/api/live"
 fallback = "http://192.168.1.221:8001/metrics"
+fallback_after = 3  # (P2) 3회 연속 실패(~3s) 시 폴백, 1회 성공 시 복귀
 
 [speed]  # gputils core.py 속도 모델 포트 (동일 파라미터)
 tok_cap = 40.0

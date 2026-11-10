@@ -68,6 +68,12 @@
    - `config.toml` `[speed]`/`[cat]`/`[poll].timeout` 추가, `deploy.ps1` cat_frames push
    - 검증: 유휴 상태에서 동시 `/api/live` json ↔ 화면 캡처 **픽셀 diff 0** (`scripts/verify_expect.py`), run 포즈(부하) → sleep 포즈(유휴) 전환 캡처 확인, CPU ~1%
 5. git: `dev` 브랜치 분기 — 개발은 `dev`, 안정화 시 `main` 머지 (GitHub 기본 브랜치 main 유지)
+6. **P2 폴백+폴리ッシュ 배포** (2026-11-10):
+   - `tokcat.py` — vLLM `:8001/metrics` 직결 폴백 (`fallback_after=3`회 연속 실패 시 전환, 1회 성공 시 primary 복귀, 전환 시 `poll mode` journal 로그), `fetch_metrics`(Prometheus 파싱)/`delta_rates`(counter 델타로 MTP/decode/prefill), 배지 `· vLLM` 접미, in-flight `n/a`
+   - `config.toml` — `[poll] fallback_after = 3`
+   - `scripts/` — `test_p2_poller.py`(전환 테스트), `verify_fallback.py`(폴백/오프라인 화면 픽셀 검증, 배지 상태 자동 감지), `mock_metrics.py`(결정적 mock vLLM), `proxy_live.py`(primary on/off 토글), `probe_badge*.py`(배지 픽셀 식별)
+   - 검증: mock 폴백 화면 **픽셀 diff 0** (WALK·vLLM 배지 + req 2/0, KV 42%, in-flight n/a), OFFLINE 화면 diff 0, 실 vLLM 폴백 RUN/WALK·vLLM 배지 diff 0, fallback→primary **자동 복귀**(리부트 없이, journal), primary 화면 diff 0
+   - 남은 것: 24시간 안정 동작 검증 (진행 중)
 
 ## 작업 이력 (2026-11-08)
 
@@ -95,7 +101,7 @@
 
 - `/dev/fb0`: 480×320 프레임버퍼 정상 동작 (부팅 시 CLI 콘솔이 TFT에 표시됨)
 - 터치: `ADS7846 Touchscreen` 입력 장치로 인식됨 (`/dev/input/event*`)
-- **tokcat 서비스 (P1 완료 2026-11-10)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). `scripts/capture.ps1`로 화면 캡처 확인
+- **tokcat 서비스 (P2 코드 완료 2026-11-10, 24시간 검증 진행 중)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). tokenbills 다운 시 vLLM `:8001/metrics` 직결 폴백(배지 `· vLLM`). `scripts/capture.ps1`로 화면 캡처 확인
 - 데스크톱: **리부트 후 수동** `~/start-tft-desktop.sh` 실행으로만 기동 (lightdm 자동 부팅은 이 디스플레이에서 작동안함)
 - 자동 기동: 미설정 (데스크톱 기준 — tokcat은 systemd로 자동)
 - 2026-11-08 최종 확인 (Wi-Fi .40): fb0 480×320 정상, 터치 인식 정상, SSH 정상
@@ -124,3 +130,7 @@
 - goodtft 공식 드라이버(`LCD-show`/`LCD35-show`)는 32비트 구형 OS 기준이라 64비트 trixie에서 작동안함 → 커뮤니티 dtbo 사용
 - GPIO 핫플러그 금지: 디스플레이 연결/해제 전 반드시 전원 차단
 - `grep -q dtparam=spi=on config.txt`처럼 주석 라인(`#dtparam=spi=on`)이 부분 일치하므로, 주석 해제 확인은 `grep -n`으로 직접 보기
+- `pkill -f proxy_live.py`는 **자기 자신의 `bash -c` 명령줄도 매칭**해서 원격 셸 자체를 죽임 (나머지 명령 미실행, 출력이 없음) → 패턴을 문자 클래스로 (`pkill -f [p]roxy_live.py`)
+- vLLM `/metrics`: `inter_token_latency_seconds_sum`·`time_to_first_token_seconds_sum`은 **`vllm:` 접두사 없음** (나머지는 있음) — 파서에서 접두사 strip
+- fb0 캡처 픽셀 비교: 기대 이미지를 **RGB565 라운드트립**(`rgb_to_565`→`decode_565`) 안 하면 배지 배경/텍스트가 전부 "차이"로 잡힘 (565 양자화 차이). `verify_*` 스크립트는 라운드트립 적용
+- 상태 배지는 **오른쪽 정렬**이라 배지 텍스트가 길어지면 그 앞에 우정렬된 시계도 왼쪽으로 이동 → 픽셀 검증 배제 영역은 고정 값이 아니라 기대 이미지에서 배지 좌측 끝을 자동 감지
