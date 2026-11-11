@@ -45,6 +45,7 @@
   - 2026-11-09 검증: `192.168.1.221:8000/api/live`·`:8001/metrics` 응답 확인
 - 사용: `ssh runcater` (Windows PowerShell 어디서든 가능)
 - **리부팅 후 접속이 안 되면**: 물리 네트워크(유선/Wi-Fi) 확인 → DHCP IP가 바뀔 수 있음 → 필요 시 ping 스캔
+- 화면 방향: **180° 회전 적용됨 (2026-11-11, rotate=270)** — 패널을 정방향으로 놓을 수 없는 설치 장소 대응. 원복: `sudo cp /boot/firmware/overlays/mpi3501-custom.dtbo.bak-rotate90 /boot/firmware/overlays/mpi3501-custom.dtbo` + 리부트
 - PC(Windows) IP: 192.168.0.2 / 게이트웨이 192.168.0.1
 
 ## 작업 이력 (2026-11-09)
@@ -74,6 +75,13 @@
    - `scripts/` — `test_p2_poller.py`(전환 테스트), `verify_fallback.py`(폴백/오프라인 화면 픽셀 검증, 배지 상태 자동 감지), `mock_metrics.py`(결정적 mock vLLM), `proxy_live.py`(primary on/off 토글), `probe_badge*.py`(배지 픽셀 식별)
    - 검증: mock 폴백 화면 **픽셀 diff 0** (WALK·vLLM 배지 + req 2/0, KV 42%, in-flight n/a), OFFLINE 화면 diff 0, 실 vLLM 폴백 RUN/WALK·vLLM 배지 diff 0, fallback→primary **자동 복귀**(리부트 없이, journal), primary 화면 diff 0
    - 24시간 안정화 기준: 그간 재기동/에러 없음 → 사용자 판단으로 생략, P2 완료
+7. **화면 180° 회전 (rotate=270)** (2026-11-11):
+   - 배경: 설치 장소에 파이를 정방향으로 놓을 수 없음 → 화면을 소프트웨어로 180° 회전 (패널은 물리적으로 뒤집힌 채 장착)
+   - 변경: `~/mpi3501-kernel-6.12-driver/mpi3501-custom.dts` 의 `rotate = <90>` → `<270>` (fbtft `fb_ili9486` 드라이버 `set_var()`이 0/90/180/270 지원 — MADCTL 레지스터 값 변경)
+   - `dtc -@`로 재컴파일 → `/boot/firmware/overlays/mpi3501-custom.dtbo` 교체 (원본 백업: `mpi3501-custom.dtbo.bak-rotate90`)
+   - 리부트 후 커널 로그 `fbtft_property_value: rotate = 270` 확인, 사용자 육안 확인 통과 (부팅 CLI 콘솔 포함 전체 화면 회전)
+   - 주의: `capture_fb0.py` 캡처는 프레임버퍼(앱 좌표계)를 읽으므로 **PNG는 회전 전과 동일하게 보임** — 물리 화면만 회전
+   - 터치(P3) 참고: 패널 물리 180° 회전 + 드라이버 180° 회전 → evdev raw 좌표는 **180° 반전 변환**(`x'=max-x`, `y'=max-y`) 후 기존 매핑 사용
 
 ## 작업 이력 (2026-11-08)
 

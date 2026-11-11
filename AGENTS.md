@@ -27,7 +27,7 @@
 
 ## Pi 안 주요 파일
 - `/boot/firmware/config.txt` — `dtparam=spi=on`, `dtoverlay=mpi3501-custom`, `vc4-kms-v3d`/`max_framebuffers` 주석 처리 (백업: `config.txt.bak-tokcat`)
-- `/boot/firmware/overlays/mpi3501-custom.dtbo` — 디스플레이+터치 Device Tree (출처: github.com/chessarisilvio/mpi3501-kernel-6.12-driver)
+- `/boot/firmware/overlays/mpi3501-custom.dtbo` — 디스플레이+터치 Device Tree (출처: github.com/chessarisilvio/mpi3501-kernel-6.12-driver) — **rotate=270 (화면 180° 회전, 2026-11-11)** · 원본 백업 `mpi3501-custom.dtbo.bak-rotate90` · 소스 `~/mpi3501-kernel-6.12-driver/mpi3501-custom.dts` 수정 후 `dtc -@ -I dts -O dtb` 재컴파일
 - `/usr/share/X11/xorg.conf.d/99-fbdev.conf` — Xorg fbdev 설정 (**/dev/fb0** — 원본 리포는 fb1이므로 수정했음), `99-touch.conf` — evdev 터치+캘리브레이션
 - `~/start-tft-desktop.sh` — 데스크톱 수동 기동 (리부트 후엔 CLI만 뜸, lightdm 자동 부팅 불가)
 - 커널 모듈: `fb_ili9486`(staging/fbtft), `ads7846`, `spi-bcm2835` — 전부 내장, 컴파일 불필요
