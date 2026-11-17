@@ -1,4 +1,4 @@
-# tokcat — 작업 요약 (2026-11-14 기준)
+# tokcat — 작업 요약 (2026-11-18 기준)
 
 > 지금까지 작업한 내용 전체를 한 문서에 정리한 것.
 > 하드웨어 스펙/핀아웃은 `README.md`, 계획·결정 이력은 `PLAN.md` 참조 — 이 문서는 **무엇을 했고 현재 어떤 상태인지**에 집중.
@@ -73,14 +73,24 @@ runcater (tokcat.service, Python)
 - 부팅 CLI 콘솔 포함 전체 화면이 회전. **캡처 PNG는 프레임버퍼(앱 좌표계)를 읽어서 회전 전과 동일하게 보임** (정상)
 - 원복: 백업 dtbo 복원 + 리부트
 
-## 3. 현재 상태 (2026-11-14)
+### 콘솔 커서·화면 이상 수정 — VT 그래픽스 그랩 (2026-11-18, ✅)
+- 증상: 화면에 **콘솔(키보드) 커서가 깜빡이고**, **가끔 이미지가 깨져 멈춘 듯** 보이는 현상
+- **원인**: 부팅부터 켜져 있는 `/dev/tty1` getty 콘솔(fbcon)이 **fb0을 공유** — 커널 printk·getty 재그림·커서가 톡캣 픽셀 위에 vmem에 그려지고, fbtft deferred push로 패널에 출력이 됨. 톡캣의 다음 풀프레임(≈1초)이 덮어쓰므로 **캡처(1.5~3초 간격)로는 잡히지 않음**
+  - 증거 (2026-11-18 버스트 캡처): `/dev/tty1`에 텍스트 주입 후 즉시 연사 → vmem에서 **콘솔 텍스트 "tokcat-vt-probe" (y160–167) + 커서 밑줄 (8px, x0 y175)** 포착, ≈1.6초 후 톡캣 풀프레임에 소멸. 유휴 25+ 캡처에서는 0개 (이벤트 드묾 — 커널 printk 2~15분 간격)
+- **수정 (옵션 A — Pillow+mmap 유지)**: `tokcat.py`가 기동 시 `/dev/tty1`을 **KD_GRAPHICS** 모드로 그랩 (fbcon 그림 전체 정지: 커서 숨김 + 출력 버퍼링), 종료/크래시 재기동 시 **KD_TEXT** 복원 (systemd `Restart=always` 2초)
+  - `KDSETMODE(0x4B3A)`는 ioctl arg에 **모드 값 자체**를, `KDGETMODE(0x4B3B)`는 **포인터**를 받음 (6.18 `vt_ioctl.c` — 처음에 버퍼 전달 시 EINVAL)
+  - journal: `tokcat: vt /dev/tty1 mode 0 -> graphics` / `tokcat: vt restored to text mode`
+- **검증**: 그랩 후 KDGETMODE=1 / 콘솔 줄 주입 버스트 캡처 → **아티팩트 0** (수정 전: 텍스트+커서 포착) / 재시작 주기 release→grab 정상 / 화면 probe 정상
+- **부수 확인**: 커널 `fbtft_update_display: start_line=319 ... full display update` 경고 (2~15분 간격)는 **무해** — 페이지 캐시 미경로(콘솔 등) 쓰기를 보상하는 전체 vmem→패널 재전송일 뿐, 내용상 현재 vmem을 읽으므로 화면 손상 없음
+
+## 3. 현재 상태 (2026-11-18)
 
 | 항목 | 상태 |
 |---|---|
-| 서비스 | `tokcat.service` active — 11-13 18:07 부팅 이후 재기동 0회 (에러 0) |
-| 화면 | 라이브 지표 + 고양이 애니메이션 정상 표시, 180° 회전 적용 |
+| 서비스 | `tokcat.service` active — 11-13 18:07 부팅 이후, 11-18 VT 그랩 배포·재시작 포함 정상 |
+| 화면 | 라이브 지표 + 고양이 애니메이션 정상, 180° 회전 적용, **콘솔 커서/아티팩트 제거** (VT 그랩) |
 | 폴백 | 미사용 (tokenbills 정상) — 필요 시 자동 전환 |
-| 브랜치 | `dev` = `main` = `3ceb0a6` (모든 작업 main에 머지 완료) |
+| 브랜치 | `dev` 작업 중 — `main`은 `3ceb0a6`(180° 회전)까지, dev에 요약 문서 + 이번 VT 그랩 커밋 추가 (안정화 후 머지 예정) |
 | 터치 | **사용 안 함 (사용자 결정 2026-11-11)** — 하드웨어는 인식만 되고 앱은 미사용 |
 
 ## 4. 주요 결정 이력
@@ -97,6 +107,7 @@ runcater (tokcat.service, Python)
 | 8 | 24시간 안정화 기준: 사용자 판단으로 생략 (그간 문제 없음) | 11-10 |
 | 9 | 화면 180° 회전 (rotate=270) | 11-11 |
 | 10 | **터치 미사용** — 관련 개발 생략 | 11-11 |
+| 11 | 콘솔 커서/화면 이상: **Pillow+mmap 유지 + VT(KD_GRAPHICS) 그랩** (pygame 전환 불필요 — 원인 자체가 fbcon fb0 공유) | 11-18 |
 
 ## 5. 남은 후보 (진행 여부는 사용자 결정)
 
@@ -110,7 +121,7 @@ P3 (옵션) 중 터치 제외 후 남은 것:
 
 ```
 tokcat/
-├── tokcat.py              # 메인 앱 (fb0 렌더링 + 폴링 + 폴백, ~470줄)
+├── tokcat.py              # 메인 앱 (fb0 렌더링 + 폴링 + 폴백 + VT 그랩, ~640줄)
 ├── capture_fb0.py         # fb0 → PNG 캡처 (검증 루프)
 ├── config.toml            # [display]/[poll]/[speed]/[cat]/[color]/[font]
 ├── tokcat.service         # systemd 유닛
@@ -125,7 +136,9 @@ tokcat/
 │   ├── test_p2_poller.py  # 폴백 전환 단위 테스트
 │   ├── mock_metrics.py    # 결정적 mock vLLM (테스트용)
 │   ├── proxy_live.py      # tokenbills 프록시 — primary on/off 토글 (테스트용)
-│   ├── probe*.py          # 화면 픽셀 프로브 (디버깅)
+│   ├── probe*.py          # 화면 픽셀 프로브 (디버깅: cursor/console/diff/crop/band)
+│   ├── burst_probe.py     # 콘솔 이벤트 주입 + 연사 캡처 (커서 포착, 11-18)
+│   ├── vt_set.py          # VT 모드 get/set (KDGETMODE/KDSETMODE, 11-18)
 │   └── flip_rotate.py     # dtbo rotate 90→270 원샷 스크립트
 ├── PLAN.md                # 계획·결정·산출물
 └── README.md              # 하드웨어 스펙·핀아웃·작업 이력·함정 기록
@@ -143,3 +156,6 @@ Pi: `/opt/tokcat/` (위 파일) + systemd `tokcat.service`
 - **픽셀 비교**: 기대 이미지 **RGB565 라운드트립** 안 하면 전부 "차이"로 잡힘
 - **배지 우정렬**: 배지 텍스트 길이 변화 → 앞의 시계 위치 이동 → 검증 배제 영역은 자동 감지
 - **캡처의 한계**: fb0(앱 좌표계)를 읽으므로 하드웨어 화면 회전(MADCTL)은 캡처에 반영 안 됨
+- **콘솔 아티팩트 포착**: fbcon(커서/텍스트)이 그린 vmem 픽셀은 톡캣 풀프레임(≈1초)에 덮여 **간격 캡처로는 안 잡힘** → `/dev/tty1`에 줄 주입 + 즉시 연사(`burst_probe.py`)로 포착. **패널 ≠ vmem** (패널은 마지막 push 내용 유지)
+- **KDSETMODE ioctl**: arg에 **모드 값 자체**(int)를 전달 (`fcntl.ioctl(fd, 0x4B3A, 1)`) — 포인터/4바이트 버퍼를 넘기면 EINVAL. `KDGETMODE(0x4B3B)`만 포인터(bytearray(4))
+- **fbtft `start_line > end_line ... full display update` 경고**: 2~15분 간격, 무해 — 페이지 캐시 미경로 쓰기의 전체 vmem→패널 재전송 (내용은 현재 vmem)

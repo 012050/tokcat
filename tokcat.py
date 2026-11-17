@@ -10,6 +10,11 @@ P2: vLLM /metrics direct fallback — after N consecutive primary failures
 detail unavailable -> "n/a") and the status badge gains a "· vLLM" suffix.
 Returns to primary on the first successful probe.
 
+Console VT: the boot getty on /dev/tty1 (fbcon) shares /dev/fb0 and was
+flashing its cursor + kernel printk lines over the UI (erased by the next
+full frame within ~1 s). While running, tokcat holds the VT in KD_GRAPHICS
+mode so fbcon stops drawing entirely; it is restored to KD_TEXT on exit.
+
 Rendering strategy: the static screen (bars / clock / metrics) is composed
 once per data sample or clock tick with Pillow ("base" frame). Cat
 animation frames are pre-converted RGB565 blobs that get spliced into the
@@ -41,6 +46,16 @@ FB_DEFAULT = "/dev/fb0"
 FBIOGET_VSCREENINFO = 0x4600  # struct fb_var_screeninfo: xres(0) yres(1) ... bpp(6)
 FBIOGET_FSCREENINFO = 0x4602  # struct fb_fix_screeninfo: smem_len(24) ... line_length(48)
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+
+# Console VT (getty prompt on /dev/tty1) also draws cursor+text into fb0
+# (fbcon). While tokcat owns the framebuffer, the VT is put into
+# KD_GRAPHICS so fbcon stops drawing entirely (cursor, kernel printk,
+# getty redraws) — without it the console cursor flashes over the UI.
+VT_DEFAULT = "/dev/tty1"
+KDGETMODE = 0x4B3B  # arg: pointer to int (current mode)
+KDSETMODE = 0x4B3A  # arg: the mode VALUE itself (vt_kdsetmode(vc, arg))
+KD_TEXT = 0x00
+KD_GRAPHICS = 0x01
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -86,6 +101,50 @@ def open_fb(path=FB_DEFAULT):
     line_length = struct.unpack_from("I", finfo, 48)[0]
     mm = mmap.mmap(fd, smem_len)
     return fd, mm, xres, yres, line_length
+
+
+def _vt_get_mode(fd):
+    buf = bytearray(4)
+    fcntl.ioctl(fd, KDGETMODE, buf)
+    return struct.unpack("i", buf)[0]
+
+
+def grab_vt(path=VT_DEFAULT):
+    """Put the console VT into KD_GRAPHICS mode: fbcon stops drawing the
+    cursor and text into the framebuffer (verified 2026-11-18: the getty
+    cursor + printk lines flash over the UI, erased by the next full
+    frame within ~1 s).
+
+    KDSETMODE takes the mode value directly as the ioctl arg (see
+    drivers/tty/vt/vt_ioctl.c: vt_kdsetmode(vc, arg)); KDGETMODE takes a
+    pointer. Returns (fd, old_mode) or (None, None) when unavailable.
+    """
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError as exc:
+        print(f"tokcat: vt open {path} failed: {exc}", flush=True)
+        return None, None
+    old_mode = _vt_get_mode(fd)
+    if old_mode != KD_GRAPHICS:
+        fcntl.ioctl(fd, KDSETMODE, KD_GRAPHICS)
+    print(f"tokcat: vt {path} mode {old_mode} -> graphics", flush=True)
+    return fd, old_mode
+
+
+def release_vt(fd, old_mode):
+    """Restore the console VT (KD_TEXT) and close it. On restore the
+    kernel does a full console redraw (buffered printk + prompt), which
+    tokcat's next full frame overwrites within ~1 s."""
+    if fd is None:
+        return
+    try:
+        if old_mode == KD_TEXT:
+            fcntl.ioctl(fd, KDSETMODE, KD_TEXT)
+            print(f"tokcat: vt restored to text mode", flush=True)
+    except OSError as exc:
+        print(f"tokcat: vt release failed: {exc}", flush=True)
+    finally:
+        os.close(fd)
 
 
 def hexcolor(s):
@@ -522,51 +581,60 @@ def main():
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
-    fd, mm, xres, yres, line_length = open_fb()
-    fonts = load_fonts(cfg)
-    cat565 = load_cat_frames(cfg)
-    print(f"tokcat: fb0 {xres}x{yres} line_length={line_length} "
-          f"numpy={_HAVE_NUMPY}", flush=True)
+    vt_fd, vt_old = grab_vt()
+    fd = mm = None
+    poller = None
+    try:
+        fd, mm, xres, yres, line_length = open_fb()
+        fonts = load_fonts(cfg)
+        cat565 = load_cat_frames(cfg)
+        print(f"tokcat: fb0 {xres}x{yres} line_length={line_length} "
+              f"numpy={_HAVE_NUMPY}", flush=True)
 
-    box = _SnapshotBox()
-    poll = cfg["poll"]
-    poller = LivePoller(poll["primary"], poll["fallback"],
-                        float(poll["interval"]), float(poll.get("timeout", 2.0)),
-                        cfg["speed"], box.on_sample,
-                        int(poll.get("fallback_after", 3)))
-    poller.start()
+        box = _SnapshotBox()
+        poll = cfg["poll"]
+        poller = LivePoller(poll["primary"], poll["fallback"],
+                            float(poll["interval"]),
+                            float(poll.get("timeout", 2.0)),
+                            cfg["speed"], box.on_sample,
+                            int(poll.get("fallback_after", 3)))
+        poller.start()
 
-    last_base = None
-    last_cat = None
-    last_seq, last_sec = -1, -1
-    frame_idx = 0
-    next_anim = 0.0
-    while not _stop:
-        t = time.monotonic()
-        snap, seq = box.take()
-        sec = int(t)
-        rebuild = (last_base is None or seq != last_seq or sec != last_sec)
-        interval = FRAME_INTERVALS[snap.state]
-        if interval is None:
-            cat_idx = SLEEP_FRAME
-        elif t >= next_anim:
-            frame_idx = (frame_idx + 1) % RUN_FRAME_COUNT
-            next_anim = t + interval
-            cat_idx = frame_idx
-        else:
-            cat_idx = frame_idx  # current run frame stays until the next tick
-        if rebuild or cat_idx != last_cat:
-            if rebuild:
-                last_base = render_base(cfg, fonts, time.time(), snap)
-                last_seq, last_sec = seq, sec
-            mm[: len(last_base)] = splice_cat(last_base, cat565[cat_idx],
-                                              line_length)
-            last_cat = cat_idx
-        time.sleep(0.02)
-
-    poller.stop()
-    mm.close()
-    os.close(fd)
+        last_base = None
+        last_cat = None
+        last_seq, last_sec = -1, -1
+        frame_idx = 0
+        next_anim = 0.0
+        while not _stop:
+            t = time.monotonic()
+            snap, seq = box.take()
+            sec = int(t)
+            rebuild = (last_base is None or seq != last_seq or sec != last_sec)
+            interval = FRAME_INTERVALS[snap.state]
+            if interval is None:
+                cat_idx = SLEEP_FRAME
+            elif t >= next_anim:
+                frame_idx = (frame_idx + 1) % RUN_FRAME_COUNT
+                next_anim = t + interval
+                cat_idx = frame_idx
+            else:
+                cat_idx = frame_idx  # current run frame stays until the next tick
+            if rebuild or cat_idx != last_cat:
+                if rebuild:
+                    last_base = render_base(cfg, fonts, time.time(), snap)
+                    last_seq, last_sec = seq, sec
+                mm[: len(last_base)] = splice_cat(last_base, cat565[cat_idx],
+                                                  line_length)
+                last_cat = cat_idx
+            time.sleep(0.02)
+    finally:
+        if poller is not None:
+            poller.stop()
+        if mm is not None:
+            mm.close()
+        if fd is not None:
+            os.close(fd)
+        release_vt(vt_fd, vt_old)
     print("tokcat: stopped", flush=True)
 
 

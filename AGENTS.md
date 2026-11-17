@@ -13,7 +13,7 @@
 ## 시스템
 - `runcater` = Raspberry Pi 4 (4GB), Debian 13 (trixie) 64비트, 커널 6.18.60+rpt-rpi-v8
 - 디스플레이: LCDwiki MPI3501 계열 (ILI9486 SPI + XP12046 저항성 터치), 480×320
-- 프레임버퍼: `/dev/fb0` (480×320, ~31fps) — 부팅부터 CLI 콘솔이 여기에 표시됨
+- 프레임버퍼: `/dev/fb0` (480×320, ~31fps) — 부팅부터 CLI 콘솔(tty1 getty)이 여기에 표시됨 → **tokcat 실행 중에는 앱이 `/dev/tty1`을 KD_GRAPHICS 모드로 그랩** (fbcon 커서/텍스트 그림 정지, 종료 시 KD_TEXT 복원 — 2026-11-18)
 - 터치: `ads7846` 드라이버 → `ADS7846 Touchscreen` (`/dev/input/event*`)
 - USB: ROYUAN 2.4G 무선 키보드/마우스, Logitech M350
 
