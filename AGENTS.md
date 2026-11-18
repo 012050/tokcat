@@ -18,7 +18,7 @@
 - USB: ROYUAN 2.4G 무선 키보드/마우스, Logitech M350
 
 ## 접속
-- `ssh runcater` (설정: `~/.ssh/config`, 키 인증, `sudo -n` 가능)
+- `ssh tokcat` (설정: `~/.ssh/config`, 키 인증, `sudo -n` 가능) — alias만 `tokcat`(2026-11-19), 파이프 호스트명/사용자는 여전히 `runcater`
 - IP: Wi-Fi **192.168.0.40** (**기본** — 작업은 무선으로 수행) / 유선 **192.168.0.24**
 - 접속 안 될 때: 먼저 기기가 유선/Wi-Fi 어느 쪽에 물리적으로 연결됐는지 확인 (IP가 따라 바뀜, ssh config HostName도 교체 필요)
 - VPN: WireGuard `wg0`으로 `192.168.1.x`(tokenbills/vLLM `192.168.1.221`) 도달

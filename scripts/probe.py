@@ -32,7 +32,7 @@ def region(name, x0, y0, x1, y1):
     print("%s brightest: %s" % (name, best[1]))
 
 
-region("title   ", 16, 9, 140, 34)     # 'runcater' text
+region("title   ", 16, 9, 140, 34)     # 'tokcat' text
 region("time    ", 250, 10, 420, 34)   # clock
 region("badge   ", 420, 10, 464, 36)   # status badge (accent green)
 region("catbox  ", 165, 62, 315, 188)  # placeholder outline + hint

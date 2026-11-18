@@ -1,7 +1,7 @@
 # tokcat config — P2 (live metrics + cat animation + vLLM direct fallback)
 
 [display]
-title = "runcater"
+title = "tokcat"
 
 [poll]  # 1s polling; vLLM direct fallback after N consecutive primary failures
 interval = 1.0

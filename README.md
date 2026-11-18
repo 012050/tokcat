@@ -38,12 +38,12 @@
 ## 접속 방법
 
 - SSH 설정: `~/.ssh/config` (프로젝트 폴더가 **아님** — 홈 디렉터리)
-- 호스트 별칭: `runcater` → **192.168.0.40**:22 (Wi-Fi, 기본), key `~/.ssh/id_rsa`
+- 호스트 별칭: `tokcat` → **192.168.0.40**:22 (Wi-Fi, 기본), key `~/.ssh/id_rsa` (별칭은 2026-11-19까지 `runcater`였음 — 파이프 호스트명/사용자는 여전히 `runcater`)
 - IP: Wi-Fi **192.168.0.40** (`wlan0`, **기본** — 작업은 무선으로 수행) / 유선 **192.168.0.24** (`eth0`) — 2026-11-09 현재 Wi-Fi 연결 확인. 물리 연결이 바뀌면 ssh config HostName만 교체
 - VPN (2026-11-09 추가): WireGuard `wg0`으로 `192.168.1.x`(tokenbills/vLLM) 도달
   - 설정 값(엔드포인트/키/IP 할당/대역 등)은 문서에 기록하지 않음 — **사용자에게 문의**. 파일: 파이 `/etc/wireguard/wg0.conf`, systemd `wg-quick@wg0`으로 부팅 시 자동 기동
   - 2026-11-09 검증: `192.168.1.221:8000/api/live`·`:8001/metrics` 응답 확인
-- 사용: `ssh runcater` (Windows PowerShell 어디서든 가능)
+- 사용: `ssh tokcat` (Windows PowerShell 어디서든 가능)
 - **리부팅 후 접속이 안 되면**: 물리 네트워크(유선/Wi-Fi) 확인 → DHCP IP가 바뀔 수 있음 → 필요 시 ping 스캔
 - 화면 방향: **180° 회전 적용됨 (2026-11-11, rotate=270)** — 패널을 정방향으로 놓을 수 없는 설치 장소 대응. 원복: `sudo cp /boot/firmware/overlays/mpi3501-custom.dtbo.bak-rotate90 /boot/firmware/overlays/mpi3501-custom.dtbo` + 리부트
 - PC(Windows) IP: 192.168.0.2 / 게이트웨이 192.168.0.1
