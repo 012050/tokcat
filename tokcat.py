@@ -32,6 +32,7 @@ import threading
 import time
 import tomllib
 import urllib.request
+from collections import deque
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFont
@@ -71,12 +72,15 @@ FRAME_INTERVALS = {
 RUN_FRAME_COUNT = 5
 SLEEP_FRAME = RUN_FRAME_COUNT  # index of the sleeping frame in cat565
 
-# cat zone: centered in the 62..188 band; sprite 56x36 scaled to width 150
+# cat zone: top-left block (P4 layout); sprite 56x36 scaled to width 150
 # (must stay consistent with [cat] width in config.toml)
 CAT_W = 150
 CAT_H = 96  # 150 * 36 / 56 (56:36 aspect)
-CAT_X0 = (480 - CAT_W) // 2
-CAT_Y0 = 77  # vertically centered: 62 + (126 - 96) // 2
+CAT_X0 = 16
+CAT_Y0 = 60  # vertically centered in the top-left block (y 48..168)
+
+# token-rate graph history (rolling window, ~1 sample per rebuild ≈ 1s)
+HIST_MAX = 60
 
 _stop = False
 
@@ -187,6 +191,7 @@ def load_fonts(cfg):
         "badge": ttf("DejaVuSans-Bold.ttf", f["badge_size"]),
         "mono": ttf("DejaVuSansMono.ttf", f["mono_size"]),
         "mono_sm": ttf("DejaVuSansMono.ttf", f["mono_small_size"]),
+        "mono_xs": ttf("DejaVuSansMono.ttf", f["mono_xs_size"]),
     }
 
 
@@ -275,12 +280,16 @@ def _path_tag(path):
 
 
 def _format_in_flight(info):
+    """Two-line in-flight entry: 'client · path' / 'model · elapsed'."""
     client = str(info.get("client") or "?")
+    path = _path_tag(info.get("path"))
+    if len(path) > 8:
+        path = path[:7] + "…"
     model = str(info.get("model") or "?").rsplit("/", 1)[-1]
-    if len(model) > 16:
-        model = model[:15] + "…"
+    if len(model) > 12:
+        model = model[:11] + "…"
     el = float(info.get("elapsed_s") or 0.0)
-    return f"{client} · {_path_tag(info.get('path'))} · {model} · {el:.0f}s"
+    return f"{client} · {path}\n{model} · {el:.0f}s"
 
 
 def fetch_live(url, timeout):
@@ -497,8 +506,82 @@ def load_cat_frames(cfg):
     return frames
 
 
-def render_base(cfg, fonts, now, snap):
-    """Full static screen (no cat) -> RGB565 bytes. The cat is spliced later."""
+def total_tok_s(snap):
+    """Total token generation rate = running × avg decode (t/s). 0 if no data."""
+    if snap.online and snap.decode_tps is not None:
+        return snap.running * snap.decode_tps
+    return 0.0
+
+
+def _blend(c1, c2, t):
+    """Linear blend of two RGB colors (t=0 -> c1, t=1 -> c2)."""
+    return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
+
+
+def _wrap(d, text, font, max_w):
+    """Greedy word-wrap to max_w pixels; returns a list of lines."""
+    words = text.split(" ")
+    lines, cur = [], ""
+    for wd in words:
+        trial = (cur + " " + wd).strip()
+        if not cur or d.textlength(trial, font=font) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = wd
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def draw_gauge(d, cx, cy, r, frac, accent, track, dim, fg, pct_font, lbl_font):
+    """Circular 0..1 usage gauge: track ring + accent arc from 12 o'clock."""
+    frac = max(0.0, min(1.0, frac))
+    bbox = [cx - r, cy - r, cx + r, cy + r]
+    d.arc(bbox, start=0, end=359.9, fill=track, width=8)
+    if frac > 0:
+        d.arc(bbox, start=-90, end=-90 + 360 * frac, fill=accent, width=8)
+    lw = d.textlength("KV", font=lbl_font)
+    d.text((cx - lw / 2, cy - 22), "KV", font=lbl_font, fill=dim)
+    pct = f"{frac * 100:.0f}%"
+    pw = d.textlength(pct, font=pct_font)
+    d.text((cx - pw / 2, cy - 4), pct, font=pct_font, fill=fg)
+
+
+def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg):
+    """Area chart of a value history (newest at right, right-aligned)."""
+    y_base = y0 + h
+    d.line([(x0, y_base), (x0 + w, y_base)], fill=dim, width=1)
+    n = len(hist)
+    if n == 0:
+        return
+    vmax = max(max(hist), 1.0)
+    span = max(maxlen - 1, 1)
+    pts = [(x0 + ((maxlen - n + i) / span) * w,
+            y_base - 2 - (v / vmax) * (h - 6)) for i, v in enumerate(hist)]
+    d.polygon([(x0, y_base)] + pts + [(x0 + w, y_base)],
+              fill=_blend(bg, accent, 0.35))
+    d.line(pts, fill=accent, width=2)
+
+
+def draw_request_list(d, x0, y0, max_w, items, font, fg):
+    """In-flight entries (2 lines each), word-wrapped; up to 3 items / 7 lines."""
+    y = y0
+    for item in items[:3]:
+        for ln in item.split("\n"):
+            for wl in _wrap(d, ln, font, max_w):
+                if y >= y0 + 7 * 15:
+                    return
+                d.text((x0, y), wl, font=font, fill=fg)
+                y += 15
+
+
+def render_base(cfg, fonts, now, snap, hist):
+    """Full static screen (no cat) -> RGB565 bytes. The cat is spliced later.
+
+    P4 layout: top-left cat · top-right KV gauge · center metrics (incl. total
+    token rate) · bottom-left in-flight list · bottom-right token-rate graph.
+    """
     w, h = 480, 320  # fixed panel size
     c = cfg["color"]
     bg, fg = hexcolor(c["bg"]), hexcolor(c["fg"])
@@ -511,7 +594,7 @@ def render_base(cfg, fonts, now, snap):
     img = Image.new("RGB", (w, h), bg)
     d = ImageDraw.Draw(img)
 
-    # --- top bar: title | time | [status] ---
+    # --- top bar: title | time | [status] (unchanged) ---
     d.text((m, 9), cfg["display"]["title"], font=fonts["title"], fill=fg)
 
     badge = snap.state.upper()
@@ -530,35 +613,53 @@ def render_base(cfg, fonts, now, snap):
 
     d.line([(m, 44), (w - m, 44)], fill=sep, width=2)
 
-    # --- center: cat zone (stays empty — the cat frame is spliced in) ---
+    # --- layout columns / rows ---
+    lx0, lx1 = 16, 166      # left: cat (top), request list (bottom)
+    mx0, mx1 = 174, 334     # center: metrics
+    rx0, rx1 = 342, 464     # right: KV gauge (top), graph (bottom)
+    ty0, ty1 = 48, 168      # top row
+    by0, by1 = 176, 316     # bottom row
 
-    # --- metrics rows ---
+    # --- top-right: KV cache gauge (single host -> aggregate) ---
+    gcx, gcy = (rx0 + rx1) // 2, ty0 + (ty1 - ty0) // 2
+    gr = min(rx1 - rx0, ty1 - ty0) // 2 - 6
+    draw_gauge(d, gcx, gcy, gr, snap.kv, accent, sep, dim, fg,
+               fonts["mono"], fonts["mono_sm"])
+
+    # --- center: metrics (cache hit / decode / running / TOTAL) ---
+    hx0, hx1 = mx0 + 6, mx1 - 6
+    d.text((hx0, 54), "metrics", font=fonts["mono_sm"], fill=dim)
     if snap.online:
-        req = f"{snap.running}/{snap.waiting}"
-        kv = f"{snap.kv * 100:.0f}%"
-        mtp = f"{snap.mtp_rate * 100:.0f}%" if snap.mtp_rate is not None else "—"
+        hit = f"{snap.mtp_rate * 100:.0f}%" if snap.mtp_rate is not None else "—"
         dec = f"{snap.decode_tps:.1f} t/s" if snap.decode_tps is not None else "—"
-        pre = f"{snap.prefill_tps:.1f} t/s" if snap.prefill_tps is not None else "—"
-        if snap.in_flight is None:
-            inflight = "n/a"  # fallback: in-flight detail not available
-        elif snap.in_flight:
-            inflight = snap.in_flight[0]
-        else:
-            inflight = "—"
+        run = str(snap.running)
     else:
-        req = kv = mtp = dec = pre = "—"
-        inflight = "n/a"
+        hit = dec = run = "—"
+    ry = 84
+    for label, value in (("cache hit", hit), ("decode", dec), ("× running", run)):
+        d.text((hx0, ry), label, font=fonts["mono_sm"], fill=dim)
+        vw = d.textlength(value, font=fonts["mono_sm"])
+        d.text((hx1 - vw, ry), value, font=fonts["mono_sm"], fill=fg)
+        ry += 26
+    d.line([(hx0, ry), (hx1, ry)], fill=sep, width=2)
+    tval = f"{total_tok_s(snap):.1f} t/s"
+    d.text((hx0, ry + 14), "TOTAL", font=fonts["mono_sm"], fill=dim)
+    tw2 = d.textlength(tval, font=fonts["mono"])
+    d.text((hx1 - tw2, ry + 8), tval, font=fonts["mono"], fill=accent)
 
-    draw_kv_row(d, m, 208, [("req", req), ("KV", kv), ("MTP", mtp)],
-                fonts["mono"], fg, dim)
-    draw_kv_row(d, m, 238, [("decode", dec), ("prefill", pre)],
-                fonts["mono"], fg, dim)
+    # --- bottom-left: in-flight request list ---
+    d.text((lx0 + 6, by0 + 6), "in-flight", font=fonts["mono_sm"], fill=dim)
+    if not snap.online or snap.in_flight is None:
+        d.text((lx0 + 6, by0 + 28), "n/a", font=fonts["mono_sm"], fill=dim)
+    elif snap.in_flight:
+        draw_request_list(d, lx0 + 6, by0 + 28, lx1 - lx0 - 12,
+                          list(snap.in_flight), fonts["mono_xs"], fg)
+    else:
+        d.text((lx0 + 6, by0 + 28), "—", font=fonts["mono_sm"], fill=dim)
 
-    # --- in-flight row ---
-    d.line([(m, 268), (w - m, 268)], fill=sep, width=2)
-    d.text((m, 280), "in-flight:", font=fonts["mono_sm"], fill=dim)
-    d.text((m + d.textlength("in-flight:", font=fonts["mono_sm"]) + 6, 280),
-           inflight, font=fonts["mono_sm"], fill=fg)
+    # --- bottom-right: total token-rate graph ---
+    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 92, hist, HIST_MAX, accent, dim, bg)
+    d.text((rx0 + 2, by1 - 14), "total tok/s", font=fonts["mono_sm"], fill=dim)
 
     return rgb_to_565(img)
 
@@ -605,6 +706,7 @@ def main():
         last_seq, last_sec = -1, -1
         frame_idx = 0
         next_anim = 0.0
+        hist = deque(maxlen=HIST_MAX)  # total token-rate history for the graph
         while not _stop:
             t = time.monotonic()
             snap, seq = box.take()
@@ -621,7 +723,8 @@ def main():
                 cat_idx = frame_idx  # current run frame stays until the next tick
             if rebuild or cat_idx != last_cat:
                 if rebuild:
-                    last_base = render_base(cfg, fonts, time.time(), snap)
+                    hist.append(total_tok_s(snap))
+                    last_base = render_base(cfg, fonts, time.time(), snap, hist)
                     last_seq, last_sec = seq, sec
                 mm[: len(last_base)] = splice_cat(last_base, cat565[cat_idx],
                                                   line_length)

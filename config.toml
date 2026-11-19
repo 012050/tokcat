@@ -1,4 +1,5 @@
-# tokcat config — P2 (live metrics + cat animation + vLLM direct fallback)
+# tokcat config — P4 (new layout: cat TL, KV gauge TR, metrics C, request
+# list BL, token-rate graph BR + vLLM direct fallback)
 
 [display]
 title = "tokcat"
@@ -40,4 +41,5 @@ title_size = 22
 time_size = 18
 mono_size = 18
 mono_small_size = 14
+mono_xs_size = 12   # in-flight request list (P4)
 badge_size = 14
