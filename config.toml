@@ -3,6 +3,7 @@
 
 [display]
 title = "tokcat"
+graph_max_tok_s = 100  # (P4) token-rate graph fixed Y-axis max (tok/s); above clamps to top
 
 [poll]  # 1s polling; vLLM direct fallback after N consecutive primary failures
 interval = 1.0

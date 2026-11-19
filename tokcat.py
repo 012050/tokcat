@@ -548,17 +548,22 @@ def draw_gauge(d, cx, cy, r, frac, accent, track, dim, fg, pct_font, lbl_font):
     d.text((cx - pw / 2, cy - 4), pct, font=pct_font, fill=fg)
 
 
-def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg):
-    """Area chart of a value history (newest at right, right-aligned)."""
+def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0):
+    """Area chart of a value history (newest at right, right-aligned).
+
+    vmax is a fixed Y-axis max (default 100 tok/s) so the scale is stable and
+    comparable over time. Values above vmax are clamped to the top.
+    """
     y_base = y0 + h
     d.line([(x0, y_base), (x0 + w, y_base)], fill=dim, width=1)
     n = len(hist)
     if n == 0:
         return
-    vmax = max(max(hist), 1.0)
+    vmax = max(vmax, 1.0)
     span = max(maxlen - 1, 1)
     pts = [(x0 + ((maxlen - n + i) / span) * w,
-            y_base - 2 - (v / vmax) * (h - 6)) for i, v in enumerate(hist)]
+            y_base - 2 - (min(v, vmax) / vmax) * (h - 6))
+           for i, v in enumerate(hist)]
     d.polygon([(x0, y_base)] + pts + [(x0 + w, y_base)],
               fill=_blend(bg, accent, 0.35))
     d.line(pts, fill=accent, width=2)
@@ -657,8 +662,9 @@ def render_base(cfg, fonts, now, snap, hist):
     else:
         d.text((lx0 + 6, by0 + 28), "—", font=fonts["mono_sm"], fill=dim)
 
-    # --- bottom-right: total token-rate graph ---
-    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 92, hist, HIST_MAX, accent, dim, bg)
+    # --- bottom-right: total token-rate graph (fixed Y max from config) ---
+    gmax = float(cfg["display"].get("graph_max_tok_s", 100.0))
+    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 92, hist, HIST_MAX, accent, dim, bg, gmax)
     d.text((rx0 + 2, by1 - 14), "total tok/s", font=fonts["mono_sm"], fill=dim)
 
     return rgb_to_565(img)
