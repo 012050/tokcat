@@ -513,6 +513,13 @@ def total_tok_s(snap):
     return 0.0
 
 
+def _rate(v):
+    """Format a tokens/s value compactly: 1 decimal under 100, else 0."""
+    if v is None:
+        return "—"
+    return f"{v:.1f} t/s" if v < 100 else f"{v:.0f} t/s"
+
+
 def _blend(c1, c2, t):
     """Linear blend of two RGB colors (t=0 -> c1, t=1 -> c2)."""
     return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
@@ -649,17 +656,20 @@ def render_base(cfg, fonts, now, snap, hist):
     draw_gauge(d, gcx, gcy, gr, snap.kv, accent, sep, dim, fg,
                fonts["mono"], fonts["mono_sm"])
 
-    # --- center: metrics (cache hit / decode / running / TOTAL) ---
+    # --- center: metrics (cache hit / mtp hit / prefill / decode / running /
+    #     TOTAL) ---
     hx0, hx1 = mx0 + 6, mx1 - 6
-    d.text((hx0, 54), "metrics", font=fonts["mono_sm"], fill=dim)
     if snap.online:
         hit = f"{snap.mtp_rate * 100:.0f}%" if snap.mtp_rate is not None else "—"
-        dec = f"{snap.decode_tps:.1f} t/s" if snap.decode_tps is not None else "—"
+        mtp = hit
+        pre = _rate(snap.prefill_tps)
+        dec = _rate(snap.decode_tps)
         run = str(snap.running)
     else:
-        hit = dec = run = "—"
-    ry = 84
-    for label, value in (("cache hit", hit), ("decode", dec), ("× running", run)):
+        hit = mtp = pre = dec = run = "—"
+    ry = 64
+    for label, value in (("cache hit", hit), ("mtp hit", mtp),
+                         ("prefill", pre), ("decode", dec), ("× running", run)):
         d.text((hx0, ry), label, font=fonts["mono_sm"], fill=dim)
         vw = d.textlength(value, font=fonts["mono_sm"])
         d.text((hx1 - vw, ry), value, font=fonts["mono_sm"], fill=fg)
