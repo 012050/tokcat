@@ -555,14 +555,15 @@ def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0,
     vmax is a fixed Y-axis max (default 100 tok/s) so the scale is stable and
     comparable over time. Values above vmax are clamped to the top.
 
-    With label_font, also draws the top reference line (the chart's max
-    height = vmax), the scale-max label (top-right) and the current speed
-    (top-left) so the chart is readable at a glance.
+    The chart area is enclosed by a full rectangular border (dim) so its max
+    height (top edge = vmax) and bottom (0 level) are always visible.
+    With label_font, also draws the scale-max label (top-right) and the
+    current speed (top-left) so the chart is readable at a glance.
     """
     y_base = y0 + h
-    # bottom baseline (0 level) + top reference line (max height = vmax level)
-    d.line([(x0, y_base), (x0 + w, y_base)], fill=dim, width=1)
-    d.line([(x0, y0), (x0 + w, y0)], fill=dim, width=1)
+    # full rectangular border: bottom (0 level), top (max height = vmax level),
+    # left and right sides, so the chart area is always clearly bounded
+    d.rectangle([x0, y0, x0 + w, y_base], outline=dim, width=1)
     n = len(hist)
     if n > 0:
         vmax = max(vmax, 1.0)
