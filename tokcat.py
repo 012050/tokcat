@@ -548,25 +548,39 @@ def draw_gauge(d, cx, cy, r, frac, accent, track, dim, fg, pct_font, lbl_font):
     d.text((cx - pw / 2, cy - 4), pct, font=pct_font, fill=fg)
 
 
-def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0):
+def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0,
+               label_font=None):
     """Area chart of a value history (newest at right, right-aligned).
 
     vmax is a fixed Y-axis max (default 100 tok/s) so the scale is stable and
     comparable over time. Values above vmax are clamped to the top.
+
+    With label_font, also draws the top reference line (the chart's max
+    height = vmax), the scale-max label (top-right) and the current speed
+    (top-left) so the chart is readable at a glance.
     """
     y_base = y0 + h
+    # bottom baseline (0 level) + top reference line (max height = vmax level)
     d.line([(x0, y_base), (x0 + w, y_base)], fill=dim, width=1)
+    d.line([(x0, y0), (x0 + w, y0)], fill=dim, width=1)
     n = len(hist)
-    if n == 0:
-        return
-    vmax = max(vmax, 1.0)
-    span = max(maxlen - 1, 1)
-    pts = [(x0 + ((maxlen - n + i) / span) * w,
-            y_base - 2 - (min(v, vmax) / vmax) * (h - 6))
-           for i, v in enumerate(hist)]
-    d.polygon([(x0, y_base)] + pts + [(x0 + w, y_base)],
-              fill=_blend(bg, accent, 0.35))
-    d.line(pts, fill=accent, width=2)
+    if n > 0:
+        vmax = max(vmax, 1.0)
+        span = max(maxlen - 1, 1)
+        pts = [(x0 + ((maxlen - n + i) / span) * w,
+                y_base - 2 - (min(v, vmax) / vmax) * (h - 6))
+               for i, v in enumerate(hist)]
+        d.polygon([(x0, y_base)] + pts + [(x0 + w, y_base)],
+                  fill=_blend(bg, accent, 0.35))
+        d.line(pts, fill=accent, width=2)
+    # labels drawn last (on top of data) so they stay readable
+    if label_font is not None:
+        top_lbl = f"{vmax:.0f}"
+        d.text((x0 + w - d.textlength(top_lbl, font=label_font) - 2, y0 + 2),
+               top_lbl, font=label_font, fill=dim)
+        if n > 0:
+            d.text((x0 + 2, y0 + 2), f"{hist[-1]:.0f} t/s",
+                   font=label_font, fill=accent)
 
 
 def draw_request_list(d, x0, y0, max_w, items, font, fg):
@@ -662,9 +676,10 @@ def render_base(cfg, fonts, now, snap, hist):
     else:
         d.text((lx0 + 6, by0 + 28), "—", font=fonts["mono_sm"], fill=dim)
 
-    # --- bottom-right: total token-rate graph (fixed Y max from config) ---
+    # --- bottom-right: total token-rate graph (fixed Y max + labels) ---
     gmax = float(cfg["display"].get("graph_max_tok_s", 100.0))
-    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 92, hist, HIST_MAX, accent, dim, bg, gmax)
+    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 92, hist, HIST_MAX, accent, dim, bg,
+               gmax, fonts["mono_xs"])
     d.text((rx0 + 2, by1 - 14), "total tok/s", font=fonts["mono_sm"], fill=dim)
 
     return rgb_to_565(img)
