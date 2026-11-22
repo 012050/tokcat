@@ -556,31 +556,34 @@ def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0,
     comparable over time. Values above vmax are clamped to the top.
 
     The chart area is enclosed by a full rectangular border (dim) so its max
-    height (top edge = vmax) and bottom (0 level) are always visible.
-    With label_font, also draws the scale-max label (top-right) and the
-    current speed (top-left) so the chart is readable at a glance.
+    height (top edge = vmax) and bottom (0 level) are always visible. With
+    label_font, the scale-max label (right) and the current speed (left,
+    "t/s") are drawn in a row above the border (outside the chart) so they
+    never crowd the data.
     """
+    label_h = 15 if label_font is not None else 0
+    frame_top = y0 + label_h
     y_base = y0 + h
-    # full rectangular border: bottom (0 level), top (max height = vmax level),
-    # left and right sides, so the chart area is always clearly bounded
-    d.rectangle([x0, y0, x0 + w, y_base], outline=dim, width=1)
+    # full rectangular border around the chart area only (below the label row)
+    d.rectangle([x0, frame_top, x0 + w, y_base], outline=dim, width=1)
     n = len(hist)
     if n > 0:
         vmax = max(vmax, 1.0)
         span = max(maxlen - 1, 1)
+        amp = (y_base - frame_top) - 6
         pts = [(x0 + ((maxlen - n + i) / span) * w,
-                y_base - 2 - (min(v, vmax) / vmax) * (h - 6))
+                y_base - 2 - (min(v, vmax) / vmax) * amp)
                for i, v in enumerate(hist)]
         d.polygon([(x0, y_base)] + pts + [(x0 + w, y_base)],
                   fill=_blend(bg, accent, 0.35))
         d.line(pts, fill=accent, width=2)
-    # labels drawn last (on top of data) so they stay readable
+    # labels sit in the row above the border (outside the chart)
     if label_font is not None:
         top_lbl = f"{vmax:.0f}"
-        d.text((x0 + w - d.textlength(top_lbl, font=label_font) - 2, y0 + 2),
+        d.text((x0 + w - d.textlength(top_lbl, font=label_font) - 2, y0),
                top_lbl, font=label_font, fill=dim)
         if n > 0:
-            d.text((x0 + 2, y0 + 2), f"{hist[-1]:.0f} t/s",
+            d.text((x0 + 2, y0), f"{hist[-1]:.0f} t/s",
                    font=label_font, fill=accent)
 
 
@@ -679,7 +682,7 @@ def render_base(cfg, fonts, now, snap, hist):
 
     # --- bottom-right: total token-rate graph (fixed Y max + labels) ---
     gmax = float(cfg["display"].get("graph_max_tok_s", 100.0))
-    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 92, hist, HIST_MAX, accent, dim, bg,
+    draw_graph(d, rx0, by0 + 6, rx1 - rx0, 107, hist, HIST_MAX, accent, dim, bg,
                gmax, fonts["mono_xs"])
     d.text((rx0 + 2, by1 - 14), "total tok/s", font=fonts["mono_sm"], fill=dim)
 
