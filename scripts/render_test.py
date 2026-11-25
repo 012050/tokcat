@@ -53,7 +53,7 @@ save(sys.argv[3] + "_online.png", online, hist)
 
 fallback = tokcat.Snapshot(
     online=True, running=2, waiting=0, kv=0.55,
-    mtp_rate=None, decode_tps=18.0, prefill_tps=None,
+    mtp_rate=None, decode_tps=18.0, prefill_tps=None, cache_rate=0.63,
     in_flight=None, source="fallback", state="walk")
 save(sys.argv[3] + "_fallback.png", fallback, hist)
 

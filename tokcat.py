@@ -217,6 +217,7 @@ class Snapshot:
     waiting: int = 0
     kv: float = 0.0                # 0..1
     mtp_rate: float | None = None  # 0..1
+    cache_rate: float | None = None  # prefix cache hit rate 0..1 (fallback only)
     decode_tps: float | None = None
     prefill_tps: float | None = None
     in_flight: tuple | None = None # None = no source (offline/fallback), () = no requests
@@ -267,29 +268,11 @@ def _opt_f(v):
         return None
 
 
-def _path_tag(path):
-    parts = [p for p in (path or "").split("/") if p]
-    if not parts:
-        return "?"
-    last = parts[-1]
-    if last == "completions":
-        return "chat" if len(parts) >= 2 and parts[-2] == "chat" else "completion"
-    if last == "embeddings":
-        return "embed"
-    return last
-
-
 def _format_in_flight(info):
-    """Two-line in-flight entry: 'client · path' / 'model · elapsed'."""
+    """One-line in-flight entry: 'client · elapsed'."""
     client = str(info.get("client") or "?")
-    path = _path_tag(info.get("path"))
-    if len(path) > 8:
-        path = path[:7] + "…"
-    model = str(info.get("model") or "?").rsplit("/", 1)[-1]
-    if len(model) > 12:
-        model = model[:11] + "…"
     el = float(info.get("elapsed_s") or 0.0)
-    return f"{client} · {path}\n{model} · {el:.0f}s"
+    return f"{client} · {el:.0f}s"
 
 
 def fetch_live(url, timeout):
@@ -326,6 +309,8 @@ _VLLM_NAMES = (
     "inter_token_latency_seconds_sum", "time_to_first_token_seconds_sum",
     "spec_decode_num_draft_tokens_total",
     "spec_decode_num_accepted_tokens_total",
+    "prefix_cache_queries_total",
+    "prefix_cache_hits_total",
 )
 
 
@@ -360,12 +345,13 @@ def _delta(prev, cur, key):
 
 
 def delta_rates(prev, cur):
-    """(mtp_rate, decode_tps, prefill_tps) from counter/histogram deltas.
+    """(mtp_rate, decode_tps, prefill_tps, cache_rate) from counter/histogram deltas.
 
     Mirrors the tokenbills rate definitions (PLAN.md §4.2). None when the
     denominator is missing or zero (e.g. no prefill activity in the window).
+    cache_rate = prefix cache hits / queries (token ratio).
     """
-    mtp = decode = prefill = None
+    mtp = decode = prefill = cache = None
     d_acc = _delta(prev, cur, "spec_decode_num_accepted_tokens_total")
     d_dra = _delta(prev, cur, "spec_decode_num_draft_tokens_total")
     if d_acc is not None and d_dra is not None and d_dra > 0:
@@ -378,7 +364,11 @@ def delta_rates(prev, cur):
     d_ttft = _delta(prev, cur, "time_to_first_token_seconds_sum")
     if d_pro is not None and d_ttft is not None and d_ttft > 0:
         prefill = d_pro / d_ttft
-    return mtp, decode, prefill
+    d_qry = _delta(prev, cur, "prefix_cache_queries_total")
+    d_hit = _delta(prev, cur, "prefix_cache_hits_total")
+    if d_hit is not None and d_qry is not None and d_qry > 0:
+        cache = min(d_hit / d_qry, 1.0)
+    return mtp, decode, prefill, cache
 
 
 class LivePoller(threading.Thread):
@@ -428,13 +418,14 @@ class LivePoller(threading.Thread):
             self._set_mode("fallback")
             try:
                 vals = fetch_metrics(self.fallback, self.timeout)
-                mtp, dec, pre = delta_rates(self._prev_fb, vals)
+                mtp, dec, pre, ch = delta_rates(self._prev_fb, vals)
                 snap = Snapshot(
                     online=True,
                     running=int(vals.get("num_requests_running", 0)),
                     waiting=int(vals.get("num_requests_waiting", 0)),
                     kv=float(vals.get("kv_cache_usage_perc", 0.0)),
                     mtp_rate=mtp, decode_tps=dec, prefill_tps=pre,
+                    cache_rate=ch,
                     in_flight=None,  # tokenbills-only detail
                     source="fallback",
                 )
@@ -595,7 +586,7 @@ def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0,
 
 
 def draw_request_list(d, x0, y0, max_w, items, font, fg):
-    """In-flight entries (2 lines each), word-wrapped; up to 3 items / 7 lines."""
+    """In-flight entries (one line each: 'client · elapsed'), up to 3 items."""
     y = y0
     for item in items[:3]:
         for ln in item.split("\n"):
@@ -660,8 +651,8 @@ def render_base(cfg, fonts, now, snap, hist):
     #     TOTAL) ---
     hx0, hx1 = mx0 + 6, mx1 - 6
     if snap.online:
-        hit = f"{snap.mtp_rate * 100:.0f}%" if snap.mtp_rate is not None else "—"
-        mtp = hit
+        hit = f"{snap.cache_rate * 100:.0f}%" if snap.cache_rate is not None else "—"
+        mtp = f"{snap.mtp_rate * 100:.0f}%" if snap.mtp_rate is not None else "—"
         pre = _rate(snap.prefill_tps)
         dec = _rate(snap.decode_tps)
         run = str(snap.running)
