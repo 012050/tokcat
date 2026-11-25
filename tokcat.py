@@ -217,7 +217,7 @@ class Snapshot:
     waiting: int = 0
     kv: float = 0.0                # 0..1
     mtp_rate: float | None = None  # 0..1
-    cache_rate: float | None = None  # prefix cache hit rate 0..1 (fallback only)
+    cache_rate: float | None = None  # prefix cache hit rate 0..1 (cumulative, direct vLLM)
     decode_tps: float | None = None
     prefill_tps: float | None = None
     in_flight: tuple | None = None # None = no source (offline/fallback), () = no requests
@@ -345,13 +345,12 @@ def _delta(prev, cur, key):
 
 
 def delta_rates(prev, cur):
-    """(mtp_rate, decode_tps, prefill_tps, cache_rate) from counter/histogram deltas.
+    """(mtp_rate, decode_tps, prefill_tps) from counter/histogram deltas.
 
     Mirrors the tokenbills rate definitions (PLAN.md §4.2). None when the
     denominator is missing or zero (e.g. no prefill activity in the window).
-    cache_rate = prefix cache hits / queries (token ratio).
     """
-    mtp = decode = prefill = cache = None
+    mtp = decode = prefill = None
     d_acc = _delta(prev, cur, "spec_decode_num_accepted_tokens_total")
     d_dra = _delta(prev, cur, "spec_decode_num_draft_tokens_total")
     if d_acc is not None and d_dra is not None and d_dra > 0:
@@ -364,17 +363,29 @@ def delta_rates(prev, cur):
     d_ttft = _delta(prev, cur, "time_to_first_token_seconds_sum")
     if d_pro is not None and d_ttft is not None and d_ttft > 0:
         prefill = d_pro / d_ttft
-    d_qry = _delta(prev, cur, "prefix_cache_queries_total")
-    d_hit = _delta(prev, cur, "prefix_cache_hits_total")
-    if d_hit is not None and d_qry is not None and d_qry > 0:
-        cache = min(d_hit / d_qry, 1.0)
-    return mtp, decode, prefill, cache
+    return mtp, decode, prefill
+
+
+def prefix_cache_rate(vals):
+    """Cumulative prefix cache hit rate = hits / queries (0..1), else None.
+
+    Same figure vLLM itself logs ("Prefix cache hit rate") — a plain ratio of
+    the running counters, no window needed.
+    """
+    q = vals.get("prefix_cache_queries_total")
+    h = vals.get("prefix_cache_hits_total")
+    if q is None or h is None or q <= 0:
+        return None
+    return min(h / q, 1.0)
 
 
 class LivePoller(threading.Thread):
     """Poll the primary (tokenbills /api/live) on a fixed cadence, falling
     back to vLLM /metrics after `fallback_after` consecutive primary
     failures (P2). Returns to primary on the first successful probe.
+
+    In primary mode vLLM /metrics is also fetched each cycle, solely for the
+    prefix cache hit rate (tokenbills exposes no such field).
 
     The poll loop never dies: any fetch error yields an offline sample
     (mirrors gputils core.Poller).
@@ -406,6 +417,13 @@ class LivePoller(threading.Thread):
             # primary (back) up: reset fail count + fallback delta baseline
             self._set_mode("primary")
             self._fails, self._prev_fb = 0, None
+            try:
+                # prefix cache rate straight from vLLM (tokenbills has no
+                # such field) — best effort, primary data unaffected
+                snap.cache_rate = prefix_cache_rate(
+                    fetch_metrics(self.fallback, self.timeout))
+            except Exception:  # noqa: BLE001 - cache rate is best-effort
+                snap.cache_rate = None
             if snap.online:
                 snap.tok_s, snap.speed = model.update(
                     snap.decode_tps, snap.kv, snap.waiting)
@@ -418,14 +436,14 @@ class LivePoller(threading.Thread):
             self._set_mode("fallback")
             try:
                 vals = fetch_metrics(self.fallback, self.timeout)
-                mtp, dec, pre, ch = delta_rates(self._prev_fb, vals)
+                mtp, dec, pre = delta_rates(self._prev_fb, vals)
                 snap = Snapshot(
                     online=True,
                     running=int(vals.get("num_requests_running", 0)),
                     waiting=int(vals.get("num_requests_waiting", 0)),
                     kv=float(vals.get("kv_cache_usage_perc", 0.0)),
                     mtp_rate=mtp, decode_tps=dec, prefill_tps=pre,
-                    cache_rate=ch,
+                    cache_rate=prefix_cache_rate(vals),
                     in_flight=None,  # tokenbills-only detail
                     source="fallback",
                 )

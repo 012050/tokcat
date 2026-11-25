@@ -46,7 +46,7 @@ _inf = [
 ]
 online = tokcat.Snapshot(
     online=True, running=3, waiting=1, kv=0.42,
-    mtp_rate=0.92, decode_tps=27.0, prefill_tps=28154.6,
+    mtp_rate=0.92, decode_tps=27.0, prefill_tps=28154.6, cache_rate=0.63,
     in_flight=tuple(tokcat._format_in_flight(i) for i in _inf),
     source="primary", state="run")
 save(sys.argv[3] + "_online.png", online, hist)
