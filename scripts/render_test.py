@@ -6,7 +6,7 @@ token-rate graph BR) purely in-process. The running tokcat service is not
 affected (no framebuffer open, no KD_GRAPHICS grab).
 
 Usage: render_test.py <tokcat_dir> <config.toml> <out_prefix>
-   -> <out_prefix>_online.png / _fallback.png / _offline.png
+   -> <out_prefix>_normal.png / _nvllm.png / _offline.png
 """
 import collections
 import sys
@@ -44,20 +44,20 @@ _inf = [
     {"client": "192.168.1.9", "path": "/v1/completions",
      "model": "qwen3.8", "elapsed_s": 12},
 ]
-online = tokcat.Snapshot(
+normal = tokcat.Snapshot(
     online=True, running=3, waiting=1, kv=0.42,
     mtp_rate=0.92, decode_tps=27.0, prefill_tps=28154.6, cache_rate=0.63,
     in_flight=tuple(tokcat._format_in_flight(i) for i in _inf),
-    source="primary", state="run")
-save(sys.argv[3] + "_online.png", online, hist)
+    state="run")
+save(sys.argv[3] + "_normal.png", normal, hist)
 
-fallback = tokcat.Snapshot(
+nvllm = tokcat.Snapshot(
     online=True, running=2, waiting=0, kv=0.55,
     mtp_rate=None, decode_tps=18.0, prefill_tps=None, cache_rate=0.63,
-    in_flight=None, source="fallback", state="walk")
-save(sys.argv[3] + "_fallback.png", fallback, hist)
+    in_flight=None, state="walk")
+save(sys.argv[3] + "_nvllm.png", nvllm, hist)
 
-offline = tokcat.Snapshot(online=False, source=None, state="offline")
+offline = tokcat.Snapshot(online=False, state="offline")
 save(sys.argv[3] + "_offline.png", offline,
      collections.deque(maxlen=tokcat.HIST_MAX))
 

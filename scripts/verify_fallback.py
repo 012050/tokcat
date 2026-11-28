@@ -1,16 +1,29 @@
 #!/usr/bin/env python3
 # Run ON runcater: pixel-diff a /dev/fb0 capture against the expected
-# FALLBACK or OFFLINE screen.
+# NORMAL / NVLLM (tokenbills down) / OFFLINE screen (P5).
 #
-# The fallback badge carries a "· vLLM" suffix; the cat state (SLEEP/WALK/
-# RUN/...) comes from the EMA speed model and can lag after load, so the
-# state is AUTO-DETECTED from the capture's badge rather than assumed. The
-# system must be IDLE for the metric rows (0/0, 0%, —, in-flight n/a).
+# NORMAL:  in-flight list from tokenbills -> badge WITHOUT the "· vLLM"
+#          suffix (the in-flight region is excluded from the diff: its
+#          content follows real tokenbills traffic, not the mock).
+# NVLLM:   tokenbills unreachable -> in-flight "n/a", badge "<STATE> · vLLM".
+# OFFLINE: vLLM unreachable.
 #
-# Usage: verify_fallback.py /tmp/fb-xxx.png [offline] [running] [waiting] [kv]
-#   (running/waiting/kv override the idle 0/0/0.0 for a deterministic mock)
+# The cat state (SLEEP/WALK/RUN/...) comes from the EMA speed model and can
+# lag after load, so the state is AUTO-DETECTED from the capture's badge
+# rather than assumed. The system must be IDLE for the metric rows
+# (0/0, 0%, —).
+#
+# The token-rate graph is expected to be a FULL 60-sample all-zero history:
+# run the app with the (static) mock for >= 65 s before capturing so the
+# rolling window is filled and pixel-stable.
+#
+# Usage: verify_fallback.py /tmp/fb-xxx.png [normal|nvllm|offline]
+#        [running] [waiting] [kv] [cache_pct]
+#   (running/waiting/kv override the idle 0/0/0.0 for a deterministic mock;
+#    cache_pct < 0 or omitted -> cache hit "—" (mock has no prefix series))
 #
 # The status badge is INCLUDED in the diff — that is what we verify here.
+import collections
 import sys
 
 sys.path.insert(0, "/opt/tokcat")
@@ -22,7 +35,7 @@ import tokcat
 from capture_fb0 import decode_565
 
 cap_path = sys.argv[1]
-mode = sys.argv[2] if len(sys.argv) > 2 else "fallback"
+mode = sys.argv[2] if len(sys.argv) > 2 else "nvllm"
 
 cfg = tomllib.load(open("/opt/tokcat/config.toml", "rb"))
 c = cfg["color"]
@@ -59,13 +72,13 @@ def badge_diff(img):
 if mode == "offline":
     state = "offline"
 else:
-    # auto-detect the live state from the badge (SUFFIX included)
+    suffix = "" if mode == "normal" else " · vLLM"
     cands = [(s.upper(), error if s in ("offline", "overload")
               else (tokcat.hexcolor(c["warn"]) if s == "sprint" else accent))
              for s in ("sleep", "walk", "run", "sprint", "overload")]
     best = None
     for st, col in cands:
-        d = badge_diff(render_badge(st + " · vLLM", col))
+        d = badge_diff(render_badge(st + suffix, col))
         if best is None or d < best[0]:
             best = (d, st)
     state = best[1]
@@ -74,15 +87,18 @@ else:
 exp_running = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 exp_waiting = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 exp_kv = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
+exp_cache = float(sys.argv[6]) if len(sys.argv) > 6 else -1.0
 snap = tokcat.Snapshot(
-    online=mode == "fallback",
+    online=mode != "offline",
     running=exp_running, waiting=exp_waiting, kv=exp_kv,
     mtp_rate=None, decode_tps=None, prefill_tps=None,
-    in_flight=None,
-    source="fallback" if mode == "fallback" else None,
+    cache_rate=None if exp_cache < 0 else exp_cache / 100.0,
+    in_flight=() if mode == "normal" else None,
     state=state,
 )
-base = tokcat.render_base(cfg, fonts, 0.0, snap)  # clock excluded
+# full all-zero history (static mock -> total_tok_s always 0.0)
+hist = collections.deque([0.0] * tokcat.HIST_MAX, maxlen=tokcat.HIST_MAX)
+base = tokcat.render_base(cfg, fonts, 0.0, snap, hist)  # clock excluded
 exp = Image.frombytes("RGB", (480, 320), decode_565(base, 480 * 320))
 
 pe = exp.load()
@@ -98,9 +114,11 @@ for x in range(150, 470):
         break
 
 EXCL = [
-    (165, 77, 315, 173),                       # cat
+    (14, 58, 168, 158),                        # cat (TL block, P4 layout)
     (150, 6, (badge_left or 330) - 2, 36),     # clock (time-of-day differs)
 ]
+if mode == "normal":
+    EXCL.append((20, 200, 162, 282))           # in-flight list (real traffic)
 print("badge left edge:", badge_left)
 
 
@@ -122,7 +140,7 @@ for y in range(320):
             ymin, ymax = min(ymin, y), max(ymax, y)
             if len(first) < 10:
                 first.append((x, y, pc[x, y], pe[x, y]))
-print(f"{mode} screen pixel diffs (excl. cat/clock):", diffs)
+print(f"{mode} screen pixel diffs (excl. cat/clock{', in-flight' if mode == 'normal' else ''}):", diffs)
 if diffs:
     print("diff bbox: x %d..%d  y %d..%d" % (xmin, xmax, ymin, ymax))
 for f in first:

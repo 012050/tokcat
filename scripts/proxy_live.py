@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# P2 test helper: local proxy 127.0.0.1:18000/api/live -> tokenbills :8000.
-# Lets us toggle the "primary" up/down from the Pi without touching the
-# tokenbills production box. Start:
+# Test helper: local proxy 127.0.0.1:18000/api/live -> tokenbills :8000.
+# Lets us toggle the in-flight source up/down from the Pi without touching
+# the tokenbills production box. Start:
 #   nohup python3 /tmp/proxy_live.py > /tmp/proxy_live.log 2>&1 &
 # Stop: pkill -f proxy_live.py
 import http.server

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """tokcat — 3.5" TFT kiosk: vLLM live status + RunCat on /dev/fb0.
 
-P1: polls tokenbills /api/live (1s), shows live metrics and runs the RunCat
-animation with the gputils speed model. No X server: renders directly to
-/dev/fb0 (16bpp RGB565) via mmap.
-
-P2: vLLM /metrics direct fallback — after N consecutive primary failures
-(fallback_after) the poller serves 5 metrics straight from vLLM (in-flight
-detail unavailable -> "n/a") and the status badge gains a "· vLLM" suffix.
-Returns to primary on the first successful probe.
+Data (P5): polls vLLM /metrics (1s) as the primary source for all metrics
+(rates from 1s counter deltas, mirroring the tokenbills definitions).
+tokenbills /api/live is polled best-effort in the same cycle for the
+in-flight request list only; when it is unreachable the list shows "n/a"
+and the status badge gains a "· vLLM" suffix (vLLM-only data).
+vLLM unreachable -> OFFLINE. No X server: renders directly to /dev/fb0
+(16bpp RGB565) via mmap. Runs the RunCat animation with the gputils speed
+model.
 
 Console VT: the boot getty on /dev/tty1 (fbcon) shares /dev/fb0 and was
 flashing its cursor + kernel printk lines over the UI (erased by the next
@@ -220,8 +220,7 @@ class Snapshot:
     cache_rate: float | None = None  # prefix cache hit rate 0..1 (cumulative, direct vLLM)
     decode_tps: float | None = None
     prefill_tps: float | None = None
-    in_flight: tuple | None = None # None = no source (offline/fallback), () = no requests
-    source: str | None = None      # "primary" | "fallback" | None
+    in_flight: tuple | None = None  # None = unavailable (offline/tokenbills down), () = no requests
     tok_s: float = 0.0
     speed: float = 0.0
     state: str = "offline"
@@ -276,7 +275,8 @@ def _format_in_flight(info):
 
 
 def fetch_live(url, timeout):
-    """GET /api/live -> Snapshot. Raises on network/HTTP errors."""
+    """GET tokenbills /api/live -> Snapshot (only .in_flight is used).
+    Raises on network/HTTP errors."""
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         payload = json.loads(resp.read().decode())
     up = payload.get("upstream") or {}
@@ -297,7 +297,6 @@ def fetch_live(url, timeout):
         decode_tps=_opt_f(rates.get("decode_tokens_per_s")),
         prefill_tps=_opt_f(rates.get("prefill_tokens_per_s")),
         in_flight=tuple(inflight),
-        source="primary",
     )
 
 
@@ -380,80 +379,58 @@ def prefix_cache_rate(vals):
 
 
 class LivePoller(threading.Thread):
-    """Poll the primary (tokenbills /api/live) on a fixed cadence, falling
-    back to vLLM /metrics after `fallback_after` consecutive primary
-    failures (P2). Returns to primary on the first successful probe.
+    """Poll vLLM /metrics on a fixed cadence (required source for all six
+    metrics) and tokenbills /api/live best-effort (in-flight list only).
 
-    In primary mode vLLM /metrics is also fetched each cycle, solely for the
-    prefix cache hit rate (tokenbills exposes no such field).
-
-    The poll loop never dies: any fetch error yields an offline sample
-    (mirrors gputils core.Poller).
+    vLLM unreachable -> offline sample. tokenbills unreachable -> in-flight
+    "n/a" + badge "· vLLM" suffix. The poll loop never dies: any fetch error
+    yields an offline sample (mirrors gputils core.Poller).
     """
 
-    def __init__(self, primary, fallback, interval, timeout, scfg, on_sample,
-                 fallback_after=3):
+    def __init__(self, metrics, inflight, interval, timeout, scfg, on_sample):
         super().__init__(daemon=True)
-        self.primary, self.fallback = primary, fallback
+        self.metrics, self.inflight = metrics, inflight
         self.interval, self.timeout = interval, timeout
-        self.fallback_after = fallback_after
         self.scfg, self.on_sample = scfg, on_sample
         self._stop_evt = threading.Event()
-        self._mode = "primary"
-        self._fails = 0
-        self._prev_fb = None  # last vLLM /metrics sample (for rate deltas)
+        self._inflight_ok = None  # last in-flight reachability (log changes)
+        self._prev = None  # last vLLM /metrics sample (for rate deltas)
 
     def stop(self):
         self._stop_evt.set()
 
-    def _set_mode(self, new):
-        if new != self._mode:
-            print(f"tokcat: poll mode {self._mode} -> {new}", flush=True)
-            self._mode = new
+    def _set_inflight(self, ok):
+        if ok != self._inflight_ok:
+            print(f"tokcat: in-flight source {'up' if ok else 'down'}",
+                  flush=True)
+            self._inflight_ok = ok
 
     def _poll_once(self, model):
         try:
-            snap = fetch_live(self.primary, self.timeout)
-            # primary (back) up: reset fail count + fallback delta baseline
-            self._set_mode("primary")
-            self._fails, self._prev_fb = 0, None
-            try:
-                # prefix cache rate straight from vLLM (tokenbills has no
-                # such field) — best effort, primary data unaffected
-                snap.cache_rate = prefix_cache_rate(
-                    fetch_metrics(self.fallback, self.timeout))
-            except Exception:  # noqa: BLE001 - cache rate is best-effort
-                snap.cache_rate = None
-            if snap.online:
-                snap.tok_s, snap.speed = model.update(
-                    snap.decode_tps, snap.kv, snap.waiting)
-            return snap
-        except Exception:  # noqa: BLE001 - the loop must not die
-            self._fails += 1
-            if self._mode != "fallback" and self._fails < self.fallback_after:
-                # transient window: offline until the primary is confirmed
-                return Snapshot(online=False, error="primary unavailable")
-            self._set_mode("fallback")
-            try:
-                vals = fetch_metrics(self.fallback, self.timeout)
-                mtp, dec, pre = delta_rates(self._prev_fb, vals)
-                snap = Snapshot(
-                    online=True,
-                    running=int(vals.get("num_requests_running", 0)),
-                    waiting=int(vals.get("num_requests_waiting", 0)),
-                    kv=float(vals.get("kv_cache_usage_perc", 0.0)),
-                    mtp_rate=mtp, decode_tps=dec, prefill_tps=pre,
-                    cache_rate=prefix_cache_rate(vals),
-                    in_flight=None,  # tokenbills-only detail
-                    source="fallback",
-                )
-                self._prev_fb = vals
-            except Exception as exc:  # noqa: BLE001 - both sources down
-                snap, self._prev_fb = Snapshot(online=False, error=str(exc)), None
-            if snap.online:
-                snap.tok_s, snap.speed = model.update(
-                    snap.decode_tps, snap.kv, snap.waiting)
-            return snap
+            vals = fetch_metrics(self.metrics, self.timeout)
+        except Exception as exc:  # noqa: BLE001 - the loop must not die
+            self._prev = None  # stale baseline -> no rate on recovery
+            self._set_inflight(False)
+            return Snapshot(online=False, error=str(exc))
+        mtp, dec, pre = delta_rates(self._prev, vals)
+        self._prev = vals
+        snap = Snapshot(
+            online=True,
+            running=int(vals.get("num_requests_running", 0)),
+            waiting=int(vals.get("num_requests_waiting", 0)),
+            kv=float(vals.get("kv_cache_usage_perc", 0.0)),
+            mtp_rate=mtp, decode_tps=dec, prefill_tps=pre,
+            cache_rate=prefix_cache_rate(vals),
+            in_flight=None,  # filled below when tokenbills is reachable
+        )
+        try:
+            snap.in_flight = fetch_live(self.inflight, self.timeout).in_flight
+            self._set_inflight(True)
+        except Exception:  # noqa: BLE001 - in-flight is best-effort
+            self._set_inflight(False)
+        snap.tok_s, snap.speed = model.update(
+            snap.decode_tps, snap.kv, snap.waiting)
+        return snap
 
     def run(self):
         model = SpeedModel(self.scfg)
@@ -637,8 +614,8 @@ def render_base(cfg, fonts, now, snap, hist):
     d.text((m, 9), cfg["display"]["title"], font=fonts["title"], fill=fg)
 
     badge = snap.state.upper()
-    if snap.online and snap.source == "fallback":
-        badge += " · vLLM"
+    if snap.online and snap.in_flight is None:
+        badge += " · vLLM"  # tokenbills unreachable -> vLLM-only data
     badge_color = {"overload": error, "offline": error, "sprint": warn}.get(
         snap.state, accent)
     bw = int(d.textlength(badge, font=fonts["badge"]))
@@ -738,11 +715,10 @@ def main():
 
         box = _SnapshotBox()
         poll = cfg["poll"]
-        poller = LivePoller(poll["primary"], poll["fallback"],
+        poller = LivePoller(poll["metrics"], poll["inflight"],
                             float(poll["interval"]),
                             float(poll.get("timeout", 2.0)),
-                            cfg["speed"], box.on_sample,
-                            int(poll.get("fallback_after", 3)))
+                            cfg["speed"], box.on_sample)
         poller.start()
 
         last_base = None

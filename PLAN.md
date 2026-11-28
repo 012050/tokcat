@@ -1,7 +1,7 @@
 # tokcat — 계획 (Plan)
 
 > runcater (Raspberry Pi 4) + 3.5인치 TFT(480×320)에 **vLLM 실시간 상태 + RunCat 고양이 애니메이션**을 표시하는 전용 키오스크.
-> 2026-11-08~09 대화에서 확정된 사항의 집대성. **P0·P1·P2 완료 2026-11-10** (P0: 스켈레톤+systemd+캡처 검증 루프, 리부트 자동 기동까지 전부 확인 / P1: /api/live 폴링+6개 지표+RunCat 애니메이션, 픽셀 단위 검증 통과 / P2: vLLM 직결 폴백). **P4 레이아웃 완료 2026-11-19** (목업 기반 5블록 재설계 — §4.1·§6).
+> 2026-11-08~09 대화에서 확정된 사항의 집대성. **P0·P1·P2 완료 2026-11-10** (P0: 스켈레톤+systemd+캡처 검증 루프, 리부트 자동 기동까지 전부 확인 / P1: /api/live 폴링+6개 지표+RunCat 애니메이션, 픽셀 단위 검증 통과 / P2: vLLM 직결 폴백). **P4 레이아웃 완료 2026-11-19** (목업 기반 5블록 재설계 — §4.1·§6). **P5 vLLM 직결 primary 완료 2026-11-28** (데이터 소스 역전 — §2 #3/#4, §5.1).
 
 ## 1. 목적
 - 특정 정보(vLLM 상태/토큰 지표) + 애니메이션(부하에 따라 달리는 고양이)을 3.5인치 TFT에 항상 표시
@@ -12,8 +12,8 @@
 |---|---|---|
 | 1 | 화면 구조 | **단일 화면** — 고양이 + 실시간 지표를 한 화면에 (패널 로테이션/클라이언트 순위는 옵션으로 유보) |
 | 2 | 라벨 언어 | **영어** (한국어 전환 시 Pi에 CJK 폰트 설치 필요) |
-| 3 | 데이터 소스 | **tokenbills `GET /api/live` 1초 폴링** — 6개 지표가 1개 엔드포인트에 전부 포함 |
-| 4 | 폴백 | tokenbills 다운 시 **vLLM `:8001/metrics` 직결 폴백** (진행 중 요청 상세만 누락) |
+| 3 | 데이터 소스 | **vLLM `GET :8001/metrics` 1초 폴링 (P5, 2026-11-28)** — 6개 지표 전부 vLLM 카운터에서 직접 계산 (tokenbills의 정의와 동일). tokenbills `GET /api/live`는 **in-flight 목록 전용** best-effort (P2까지는 반대로 tokenbills가 primary였고, P5에서 역전 — 값 최신성 + tokenbills 의존성 제거) |
+| 4 | 폴백 | **vLLM 다운** → OFFLINE. **tokenbills 다운** → in-flight만 `n/a` + 배지 `· vLLM` 접미 (P5 — 배지 접미는 "tokenbills 불가" 의미로 용도 변경) |
 | 5 | 표시 정보 | 진행 중 요청(IP·모델·경과) / KV Cache 사용률 / vLLM 실행·대기 / MTP 적중률 / 디코드 속도 / 프리필 속도 |
 | 6 | 애니메이션 | gputils `core.py` **속도 모델 포트** (동일 파라미터, config 파일화) |
 | 7 | 렌더링 | Python 앱 → **`/dev/fb0` 직접 렌더링** (X 없음) |
@@ -64,15 +64,15 @@
 ### 4.2 표시 정보 6종 (소스 분석 완료 2026-11-09)
 | 정보 | 소스 | 비고 |
 |---|---|---|
-| 진행 중 요청 (IP·모델·경과) | **tokenbills 전용** (`/api/live` INFLIGHT) | 프록시 인메모리 추적 — vLLM 직결로는 상세 불가(개수만) |
+| 진행 중 요청 (IP·모델·경과) | **tokenbills 전용** (`/api/live` INFLIGHT) | 프록시 인메모리 추적 — vLLM 직결로는 상세 불가(개수만). P5: best-effort 보조 소스 (다운 시 `n/a`) |
 | vLLM 실행/대기 | `num_requests_running/waiting` | vLLM metrics 원본 — tokenbills 전용 아님 |
 | KV Cache 사용률 | `kv_cache_usage_perc` | 0~100% |
 | MTP 적중률 | Δ`spec_decode_num_accepted` / Δ`spec_decode_num_draft` | 실측 69% 기록 (vLLM MTP 활성화 확인) |
 | 디코드 속도 | Δ`generation_tokens` / Δ`inter_token_latency` | tok/s — 실측 27 tok/s 기록 |
 | 프리필 속도 | Δ`prompt_tokens` / Δ`time_to_first_token` | tok/s — **간헐적**: 신규 요청 프리필 구간에만 값, 없으면 `—` |
 
-- 갱신 주기: 1초 (tokenbills 내부 metrics 캐시가 1초 상한이라 기기 수 무관)
-- **tokenbills 경유가 필수인 정보는 "진행 중 요청 상세" 하나뿐** — 나머지는 vLLM metrics로 직접 계산 가능(폴백용)
+- 갱신 주기: 1초 — **P5: 지표는 tokcat이 vLLM 원본 카운터를 자기 1초 윈도우에서 직접 계산** (tokenbills 경유 없이 항상 마지막 1초 이내). in-flight 목록만 tokenbills 경유 (내부 metrics 캐시 1초 상한)
+- **tokenbills 경유가 필수인 정보는 "진행 중 요청 상세" 하나뿐** — P5부터 그게 유일한 tokenbills 의존 필드 (best-effort, 다운 시 `n/a`)
 
 ### 4.3 고양이 속도 모델 (gputils `core.py` 포트)
 ```
@@ -91,17 +91,17 @@ speed = 0.6·min(EMA(tok/s)/40, 1) + 0.3·kv_cache + 0.1·min(waiting/5, 1)   # 
 | 상황 | 처리 |
 |---|---|
 | 프리필 값 공백 | `—` 표시 (최근값 유지 여부는 미정, §8) |
-| tokenbills 다운 | vLLM `:8001/metrics` 직결 폴백, in-flight 섹션 `n/a`, 복구 시 자동 복귀 |
+| tokenbills 다운 (P5) | in-flight 줄만 `n/a` + 배지 `· vLLM` 접미 (용도 변경: "tokenbills 불가" 표시), 나머지 지표·고양이 정상 |
 | vLLM 다운 | OFFLINE 배지 + 고양이 수면, 재접속 감지 후 자동 복귀 |
 | 요청 없음 | 지표 0, 고양이 수면 |
 
 ## 5. 아키텍처
 
-### 5.1 데이터 흐름
+### 5.1 데이터 흐름 (P5)
 ```
 runcater (python app, systemd)
-  ├─ GET http://192.168.1.221:8000/api/live  (1s, 1차)
-  └─ GET http://192.168.1.221:8001/metrics   (폴백)
+  ├─ GET http://192.168.1.221:8001/metrics   (1s, 필수 — 6개 지표)
+  └─ GET http://192.168.1.221:8000/api/live  (1s, best-effort — in-flight 목록)
   ▼
  /dev/fb0 (480×320 RGB565)
 ```
@@ -123,6 +123,7 @@ runcater (python app, systemd)
 | **P2** 폴백+폴리ッシュ | vLLM 직결 폴백, 프리필 공백 처리, 레이아웃/폰트/색상 확정, 안정화 | tokenbills·vLLM 정지/재기동 시 앱 다운 없음, 24시간 이상 안정 동작 | ✅ 2026-11-10 (픽셀 검증 diff 0×5, 자동 복귀 확인. 24시간 기준은 사용자 판단으로 생략 — 그간 문제 없음) |
 | **P3** (옵션) | 사용량/비용(오늘·이번 달 KRW) 추가, 터치 조작(상세 전환), 클라이언트 IP 순위 | §8 결정에 따라 |
 | **P4** 레이아웃 | 목업 기반 5블록 재설계: cat 좌상단 · metrics 중앙(TOTAL=running×decode) · in-flight 좌하 · KV 게이지 우상 · 총토큰속도 그래프 우하 | 캡처로 5블록 렌더링 확인, 실시간 데이터/고양이/그래프 동작, 재시작 무에러 | ✅ 2026-11-19 |
+| **P5** vLLM 직결 primary | 데이터 소스 역전: vLLM `:8001/metrics` = 필수 primary(6개 지표 전부 직접 계산), tokenbills `:8000/api/live` = in-flight 목록 전용(best-effort). 배지 `· vLLM` 접미는 "tokenbills 불가" 의미로 용도 변경 | 3시나리오(normal/nvllm/offline) 캡처 픽셀 검증 + 라이브 재시작 무에러 | ✅ 2026-11-28 |
 
 ### P0 산출물 (2026-11-09)
 - `tokcat.py` (fb0 mmap 렌더링, Pillow RGB→565 수동 변환), `capture_fb0.py` (캡처), `config.toml`, `tokcat.service`, `install.sh`, `deploy.ps1`, `scripts/capture.ps1` (캡처→로컬), `scripts/probe.py` (픽셀 검증), `test_565.py`
@@ -167,6 +168,16 @@ runcater (python app, systemd)
 - `config.toml` — `[font] mono_xs_size = 12`
 - `scripts/render_test.py` — **신규**: fb0/VT 비사용 순수 렌더 테스트 (online/fallback/offline 3프레임 PNG). 스테이징 디렉터리(`/tmp/tokcat_p4`)에서 실행 → 프로덕션 서비스 무접촉 레이아웃 검증
 - 검증: render_test 3프레임(online/fallback/offline) 레이아웃 확인 → `/opt/tokcat` 배포 + `systemctl restart` → **라이브 캡처** 5블록+고양이+실시간 그래프 확인, journal 재시작 무에러
+
+### P5 산출물 (2026-11-28)
+- 배경: tokenbills 경유 시 지표 값에 ~1~2초 staleness (tokenbills 캐시 윈도우 + tokcat 폴링) → vLLM 원본 카운터 직접 계산으로 항상 마지막 1초 이내. tokenbills 의존 필드는 in-flight 하나만 남김
+- `tokcat.py` —
+  - `LivePoller` 단순화: primary/fallback 상태머신(`fallback_after`·3회 실패 전환) 제거. `fetch_metrics` 필수(실패 → OFFLINE), 성공 시 `fetch_live` best-effort(`.in_flight`만 사용, 실패 → `n/a`) + 전환 시 `in-flight source up/down` journal 로그
+  - `Snapshot.source` 필드 제거 — 배지 `· vLLM` 조건 = `online and in_flight is None` ("tokenbills 불가" 의미로 용도 변경)
+  - OFFLINE 시 delta 베이스라인 리셋(`_prev = None`) → 복구 직후 rate 한 사이클 `—` (카운터 리셋 방어)
+- `config.toml` — `[poll]` 키 `metrics`(vLLM 직결) / `inflight`(tokenbills)로 재명명, `fallback_after` 제거
+- `scripts/` — `test_p2_poller.py`(신규 흐름 단위 테스트), `verify_fallback.py`(3시나리오 normal/nvllm/offline, 배지 접미 자동 감지), `render_test.py`(normal/nvllm/offline 3프레임), `mock_metrics.py`·`proxy_live.py` 헤더 주석
+- 검증: 로컬 stub 단위 테스트(list→n/a→offline→복구 패턴, rate 리셋/재개) → render_test 3프레임 → 배포 후 3시나리오 캡처 픽셀 검증 → 라이브 캡처 + journal 무에러
 
 ## 7. 작업 규칙
 - 작업을 시작하기 전에 **무조건 사용자에게 확인을 받고** 시작한다 (자발 판단으로 시작하지 않음)

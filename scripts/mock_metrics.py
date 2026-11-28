@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# P2 test helper: mock vLLM /metrics on 127.0.0.1:18002.
+# Test helper: mock vLLM /metrics on 127.0.0.1:18002.
 # Static gauges + static counters (delta 0 -> rates None -> "—"), so the
-# fallback screen is fully deterministic for pixel verification.
+# screen is fully deterministic for pixel verification.
 #
 #   running=2  waiting=0  kv=0.42  -> speed=12.6 -> WALK
-#   badge = "WALK · vLLM", req "2/0", KV "42%", MTP/decode/prefill "—",
-#   in-flight "n/a"
+#   badge = "WALK" (tokenbills up) / "WALK · vLLM" (tokenbills down),
+#   req "2/0", KV "42%", MTP/decode/prefill "—"
 import http.server
 
 METRICS = """# HELP vllm:num_requests_running x

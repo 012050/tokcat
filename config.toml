@@ -5,12 +5,12 @@
 title = "tokcat"
 graph_max_tok_s = 100  # (P4) token-rate graph fixed Y-axis max (tok/s); above clamps to top
 
-[poll]  # 1s polling; vLLM direct fallback after N consecutive primary failures
+[poll]  # 1s polling; vLLM /metrics = all metrics (required), tokenbills =
+# in-flight list only (best-effort — down -> "n/a" + badge "· vLLM")
 interval = 1.0
 timeout = 2.0
-primary = "http://192.168.1.221:8000/api/live"
-fallback = "http://192.168.1.221:8001/metrics"
-fallback_after = 3  # (P2) 3회 연속 실패(~3s) 시 폴백, 1회 성공 시 복귀
+metrics = "http://192.168.1.221:8001/metrics"    # (P5) vLLM direct — 6 metrics
+inflight = "http://192.168.1.221:8000/api/live"  # (P5) tokenbills — in-flight list
 
 [speed]  # gputils core.py 속도 모델 포트 (동일 파라미터)
 tok_cap = 40.0

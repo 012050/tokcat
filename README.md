@@ -48,6 +48,15 @@
 - 화면 방향: **180° 회전 적용됨 (2026-11-11, rotate=270)** — 패널을 정방향으로 놓을 수 없는 설치 장소 대응. 원복: `sudo cp /boot/firmware/overlays/mpi3501-custom.dtbo.bak-rotate90 /boot/firmware/overlays/mpi3501-custom.dtbo` + 리부트
 - PC(Windows) IP: 192.168.0.2 / 게이트웨이 192.168.0.1
 
+## 작업 이력 (2026-11-28)
+
+1. **P5 데이터 소스 역전** — vLLM `:8001/metrics`를 primary로 승격:
+   - 배경: tokenbills 경유 시 지표 값에 ~1~2초 staleness (tokenbills 1초 캐시 윈도우 + tokcat 1초 폴링) → vLLM 원본 카운터를 tokcat이 자기 1초 윈도우에서 직접 계산 (항상 마지막 1초 이내)
+   - `tokcat.py` — `LivePoller` 상태머신 제거(`fallback_after`·3회 실패 전환 삭제), metrics 필수/inflight best-effort로 단순화, `Snapshot.source` 제거, 배지 `· vLLM` 접미 조건 = in-flight 불가("tokenbills 다운" 용도 변경), OFFLINE 시 delta 베이스라인 리셋
+   - `config.toml` — `[poll]` 키 `metrics`/`inflight`로 재명명
+   - `scripts/` — `test_p2_poller.py`(신규 흐름), `verify_fallback.py`(3시나리오: normal/nvllm/offline), `render_test.py`(3프레임) 개작
+   - 검증: 로컬 stub 단위 테스트 통과, render_test 3프레임, 배포 후 3시나리오 캡처 픽셀 검증, 라이브 캡처 + journal 무에러
+
 ## 작업 이력 (2026-11-09)
 
 1. **P0 스켈레톤 배포** — `/opt/tokcat` (로컬 repo → scp):
@@ -109,7 +118,7 @@
 
 - `/dev/fb0`: 480×320 프레임버퍼 정상 동작 (부팅 시 CLI 콘솔이 TFT에 표시됨)
 - 터치: `ADS7846 Touchscreen` 입력 장치로 인식됨 (`/dev/input/event*`)
-- **tokcat 서비스 (P2 완료 2026-11-10)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). tokenbills 다운 시 vLLM `:8001/metrics` 직결 폴백(배지 `· vLLM`). `scripts/capture.ps1`로 화면 캡처 확인
+- **tokcat 서비스 (P5 완료 2026-11-28)**: `/opt/tokcat` + systemd `tokcat.service` — 부팅 자동 기동(리부트 테스트 통과), crash 자동 재기동. 화면: 라이브 지표 6종 + in-flight + RunCat 애니메이션 (부하→속도, 유휴→수면, 접속 실패→OFFLINE 배지). 데이터: vLLM `:8001/metrics`에서 6개 지표 직접 계산(1초 윈도우) + tokenbills `:8000/api/live` in-flight 목록(best-effort — 다운 시 해당 줄만 `n/a` + 배지 `· vLLM`). `scripts/capture.ps1`로 화면 캡처 확인
 - 데스크톱: **리부트 후 수동** `~/start-tft-desktop.sh` 실행으로만 기동 (lightdm 자동 부팅은 이 디스플레이에서 작동안함)
 - 자동 기동: 미설정 (데스크톱 기준 — tokcat은 systemd로 자동)
 - 2026-11-08 최종 확인 (Wi-Fi .40): fb0 480×320 정상, 터치 인식 정상, SSH 정상
