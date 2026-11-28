@@ -25,8 +25,8 @@ with open(sys.argv[2], "rb") as f:
 fonts = tokcat.load_fonts(cfg)
 
 
-def save(name, snap, hist):
-    data = tokcat.render_base(cfg, fonts, time.time(), snap, hist)
+def save(name, snap, hist, hist_kv):
+    data = tokcat.render_base(cfg, fonts, time.time(), snap, hist, hist_kv)
     Image.frombytes("RGB", (480, 320), data).save(name)
     print("saved", name)
 
@@ -35,6 +35,15 @@ def save(name, snap, hist):
 _hist_vals = (4, 6, 9, 14, 20, 27, 29, 27, 25, 27, 28, 27,
               26, 27, 27, 28, 27, 27, 26, 27, 27, 27, 27, 27)
 hist = collections.deque((float(v) for v in _hist_vals), maxlen=tokcat.HIST_MAX)
+# a plausible KV usage % history (matches the snap.kv of each frame)
+_hist_kv_vals = (28, 33, 36, 39, 41, 42, 42, 41, 42, 42, 42, 42,
+                 42, 41, 42, 42, 42, 42, 42, 41, 42, 42, 42, 42)
+hist_kv = collections.deque((float(v) for v in _hist_kv_vals),
+                            maxlen=tokcat.HIST_MAX)
+hist_kv_nv = collections.deque([55.0] * tokcat.HIST_MAX,
+                               maxlen=tokcat.HIST_MAX)
+hist_kv_off = collections.deque([0.0] * tokcat.HIST_MAX,
+                                maxlen=tokcat.HIST_MAX)
 
 _inf = [
     {"client": "127.0.0.1", "path": "/v1/chat/completions",
@@ -49,16 +58,16 @@ normal = tokcat.Snapshot(
     mtp_rate=0.92, decode_tps=27.0, prefill_tps=28154.6, cache_rate=0.63,
     in_flight=tuple(tokcat._format_in_flight(i) for i in _inf),
     state="run")
-save(sys.argv[3] + "_normal.png", normal, hist)
+save(sys.argv[3] + "_normal.png", normal, hist, hist_kv)
 
 nvllm = tokcat.Snapshot(
     online=True, running=2, waiting=0, kv=0.55,
     mtp_rate=None, decode_tps=18.0, prefill_tps=None, cache_rate=0.63,
     in_flight=None, state="walk")
-save(sys.argv[3] + "_nvllm.png", nvllm, hist)
+save(sys.argv[3] + "_nvllm.png", nvllm, hist, hist_kv_nv)
 
 offline = tokcat.Snapshot(online=False, state="offline")
 save(sys.argv[3] + "_offline.png", offline,
-     collections.deque(maxlen=tokcat.HIST_MAX))
+     collections.deque(maxlen=tokcat.HIST_MAX), hist_kv_off)
 
 print("done")

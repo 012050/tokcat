@@ -56,6 +56,10 @@
    - `config.toml` — `[poll]` 키 `metrics`/`inflight`로 재명명
    - `scripts/` — `test_p2_poller.py`(신규 흐름), `verify_fallback.py`(3시나리오: normal/nvllm/offline), `render_test.py`(3프레임) 개작
    - 검증: 로컬 stub 단위 테스트 통과, render_test 3프레임, 배포 후 3시나리오 캡처 픽셀 검증, 라이브 캡처 + journal 무에러
+2. **그래프에 KV 사용률 % 라인** — 우하 총토큰속도 그래프에 KV cache 사용률을 선(채움 없음)으로 추가:
+   - `draw_graph`에 `kv_hist`/`kv_color` 옵션 — 고정 0~100 스케일(차트 상단=100%), 현재값 `· N %`는 좌측 라벨에 색상 매칭 표시
+   - `config.toml` `[color] kv = "0xe5c07b"`, `render_base`/`main`에 `hist_kv` 롤링(1s×60)
+   - 검증: render_test 3프레임 + 3시나리오 캡처 픽셀 diff 0 + 라이브 캡처
 
 ## 작업 이력 (2026-11-09)
 

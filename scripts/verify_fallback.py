@@ -96,9 +96,12 @@ snap = tokcat.Snapshot(
     in_flight=() if mode == "normal" else None,
     state=state,
 )
-# full all-zero history (static mock -> total_tok_s always 0.0)
+# full all-zero history (static mock -> total_tok_s always 0.0); the KV line
+# is a flat line at the mock's fixed usage (exp_kv * 100)
 hist = collections.deque([0.0] * tokcat.HIST_MAX, maxlen=tokcat.HIST_MAX)
-base = tokcat.render_base(cfg, fonts, 0.0, snap, hist)  # clock excluded
+hist_kv = collections.deque([exp_kv * 100.0] * tokcat.HIST_MAX,
+                            maxlen=tokcat.HIST_MAX)
+base = tokcat.render_base(cfg, fonts, 0.0, snap, hist, hist_kv)  # clock excluded
 exp = Image.frombytes("RGB", (480, 320), decode_565(base, 480 * 320))
 
 pe = exp.load()

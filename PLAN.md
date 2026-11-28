@@ -59,7 +59,7 @@
 | metrics | 중앙 | cache hit · decode · × running · **TOTAL = running × decode** (t/s) |
 | in-flight 목록 | 좌하 | `in_flight[]` 2줄 구조(client·path / model·경과), 최대 3건, 폴백 시 n/a |
 | KV cache 게이지 | 우상 | 원형 게이지, `kv_cache_usage` % (현재 1호스트 → 집계 단일 게이지) |
-| 총토큰속도 그래프 | 우하 | `running × decode_tps` 시계열 롤링(1s×60), 영역 차트 |
+| 총토큰속도 그래프 | 우하 | `running × decode_tps` 시계열 롤링(1s×60) 영역 차트 + **KV 사용률 % 라인**(0~100 고정 스케일, 2026-11-28) |
 
 ### 4.2 표시 정보 6종 (소스 분석 완료 2026-11-09)
 | 정보 | 소스 | 비고 |
@@ -178,6 +178,10 @@ runcater (python app, systemd)
 - `config.toml` — `[poll]` 키 `metrics`(vLLM 직결) / `inflight`(tokenbills)로 재명명, `fallback_after` 제거
 - `scripts/` — `test_p2_poller.py`(신규 흐름 단위 테스트), `verify_fallback.py`(3시나리오 normal/nvllm/offline, 배지 접미 자동 감지), `render_test.py`(normal/nvllm/offline 3프레임), `mock_metrics.py`·`proxy_live.py` 헤더 주석
 - 검증: 로컬 stub 단위 테스트(list→n/a→offline→복구 패턴, rate 리셋/재개) → render_test 3프레임 → 배포 후 3시나리오 캡처 픽셀 검증 → 라이브 캡처 + journal 무에러
+
+### P5b 그래프에 KV 사용률 라인 (2026-11-28)
+- 우하 총토큰속도 그래프에 **KV cache 사용률 % 라인** 추가 (선만, 채움 없음). `draw_graph`에 `kv_hist`/`kv_color` 옵션 — **고정 0..100 스케일**(차트 상단=100%), tok/s는 기존 `graph_max_tok_s` 스케일 유지. 현재값은 좌측 라벨에 색상 매칭으로 `· N %` 추가 (색상=레전드). `[color] kv` 추가(기본 warn `0xe5c07b`). `render_base`(…`hist`, `hist_kv`), `main` 루프의 `hist_kv` deque. 기존 시그니처 호환(`clamp_test.py` 무변경)
+- 검증: render_test 3프레임 → 3시나리오 캡처 픽셀 diff 0 (mock KV 고정 → 평탄 라인) → 라이브 캡처
 
 ## 7. 작업 규칙
 - 작업을 시작하기 전에 **무조건 사용자에게 확인을 받고** 시작한다 (자발 판단으로 시작하지 않음)

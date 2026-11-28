@@ -542,17 +542,21 @@ def draw_gauge(d, cx, cy, r, frac, accent, track, dim, fg, pct_font, lbl_font):
 
 
 def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0,
-               label_font=None):
+               label_font=None, kv_hist=None, kv_color=None):
     """Area chart of a value history (newest at right, right-aligned).
 
     vmax is a fixed Y-axis max (default 100 tok/s) so the scale is stable and
     comparable over time. Values above vmax are clamped to the top.
 
+    With kv_hist (+kv_color), a KV-usage % line is overlaid on a fixed 0..100
+    scale (chart top = 100%) as a plain line (no fill); its current value is
+    appended to the left label in kv_color (color match = implicit legend).
+
     The chart area is enclosed by a full rectangular border (dim) so its max
     height (top edge = vmax) and bottom (0 level) are always visible. With
-    label_font, the scale-max label (right) and the current speed (left,
-    "t/s") are drawn in a row above the border (outside the chart) so they
-    never crowd the data.
+    label_font, the scale-max label (right) and the current values (left,
+    "t/s" [· "KV %"]) are drawn in a row above the border (outside the chart)
+    so they never crowd the data.
     """
     label_h = 15 if label_font is not None else 0
     frame_top = y0 + label_h
@@ -570,14 +574,27 @@ def draw_graph(d, x0, y0, w, h, hist, maxlen, accent, dim, bg, vmax=100.0,
         d.polygon([(x0, y_base)] + pts + [(x0 + w, y_base)],
                   fill=_blend(bg, accent, 0.35))
         d.line(pts, fill=accent, width=2)
+    # KV usage line: fixed 0..100 scale (top = 100%), plain line, no fill
+    if kv_hist is not None and kv_color is not None and len(kv_hist) > 0:
+        span = max(maxlen - 1, 1)
+        amp = (y_base - frame_top) - 6
+        kpts = [(x0 + ((maxlen - len(kv_hist) + i) / span) * w,
+                 y_base - 2 - (min(v, 100.0) / 100.0) * amp)
+                for i, v in enumerate(kv_hist)]
+        d.line(kpts, fill=kv_color, width=2)
     # labels sit in the row above the border (outside the chart)
     if label_font is not None:
         top_lbl = f"{vmax:.0f}"
         d.text((x0 + w - d.textlength(top_lbl, font=label_font) - 2, y0),
                top_lbl, font=label_font, fill=dim)
         if n > 0:
-            d.text((x0 + 2, y0), f"{hist[-1]:.0f} t/s",
-                   font=label_font, fill=accent)
+            lbl = f"{hist[-1]:.0f} t/s"
+            d.text((x0 + 2, y0), lbl, font=label_font, fill=accent)
+            if kv_hist is not None and kv_color is not None \
+                    and len(kv_hist) > 0:
+                d.text((x0 + 2 + d.textlength(lbl, font=label_font), y0),
+                       f" · {kv_hist[-1]:.0f} %",
+                       font=label_font, fill=kv_color)
 
 
 def draw_request_list(d, x0, y0, max_w, items, font, fg):
@@ -592,17 +609,19 @@ def draw_request_list(d, x0, y0, max_w, items, font, fg):
                 y += 15
 
 
-def render_base(cfg, fonts, now, snap, hist):
+def render_base(cfg, fonts, now, snap, hist, hist_kv):
     """Full static screen (no cat) -> RGB565 bytes. The cat is spliced later.
 
     P4 layout: top-left cat · top-right KV gauge · center metrics (incl. total
-    token rate) · bottom-left in-flight list · bottom-right token-rate graph.
+    token rate) · bottom-left in-flight list · bottom-right token-rate graph
+    (tok/s area + KV usage % line).
     """
     w, h = 480, 320  # fixed panel size
     c = cfg["color"]
     bg, fg = hexcolor(c["bg"]), hexcolor(c["fg"])
     dim, accent = hexcolor(c["dim"]), hexcolor(c["accent"])
     warn, error = hexcolor(c["warn"]), hexcolor(c["error"])
+    kv = hexcolor(c["kv"])
     badge_bg = hexcolor(c["badge_bg"])
     sep = (dim[0] // 3, dim[1] // 3, dim[2] // 3)
     m = 16  # margin
@@ -676,10 +695,11 @@ def render_base(cfg, fonts, now, snap, hist):
     else:
         d.text((lx0 + 6, by0 + 28), "—", font=fonts["mono_sm"], fill=dim)
 
-    # --- bottom-right: total token-rate graph (fixed Y max + labels) ---
+    # --- bottom-right: total token-rate graph (fixed Y max + labels) +
+    #     KV usage % line (fixed 0..100 scale) ---
     gmax = float(cfg["display"].get("graph_max_tok_s", 100.0))
     draw_graph(d, rx0, by0 + 6, rx1 - rx0, 107, hist, HIST_MAX, accent, dim, bg,
-               gmax, fonts["mono_xs"])
+               gmax, fonts["mono_xs"], hist_kv, kv)
     d.text((rx0 + 2, by1 - 14), "total tok/s", font=fonts["mono_sm"], fill=dim)
 
     return rgb_to_565(img)
@@ -727,6 +747,7 @@ def main():
         frame_idx = 0
         next_anim = 0.0
         hist = deque(maxlen=HIST_MAX)  # total token-rate history for the graph
+        hist_kv = deque(maxlen=HIST_MAX)  # KV usage % history for the graph
         while not _stop:
             t = time.monotonic()
             snap, seq = box.take()
@@ -744,7 +765,9 @@ def main():
             if rebuild or cat_idx != last_cat:
                 if rebuild:
                     hist.append(total_tok_s(snap))
-                    last_base = render_base(cfg, fonts, time.time(), snap, hist)
+                    hist_kv.append(snap.kv * 100.0)
+                    last_base = render_base(
+                        cfg, fonts, time.time(), snap, hist, hist_kv)
                     last_seq, last_sec = seq, sec
                 mm[: len(last_base)] = splice_cat(last_base, cat565[cat_idx],
                                                   line_length)
